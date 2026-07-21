@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Luna — Freezers Externos</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;1,400&family=Jost:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bordo:#6B1E2E; --bordo-dark:#4A1220; --bordo-light:#8B3345;
+    --creme:#F5EFE4; --creme-dark:#EDE4D4; --marrom:#A0785A;
+    --marrom-light:#C4A882; --marrom-dark:#7A5840;
+    --text:#2C1810; --text-light:#6B4F3A; --white:#FDFAF6;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{overflow-x:hidden;max-width:100vw}
+  body{font-family:'Jost',sans-serif;background:var(--creme);color:var(--text);min-height:100vh}
+  a{color:inherit}
+
+  #carregandoOverlay{position:fixed;inset:0;z-index:99999;background:linear-gradient(145deg,#4A1220 0%,#2C0A14 60%,#1A0008 100%);display:flex;align-items:center;justify-content:center;color:#C4A882;font-size:.85rem;letter-spacing:.1em;text-transform:uppercase;text-align:center;padding:20px}
+
+  #appRoot{display:none}
+  header{background:var(--bordo);color:var(--creme);padding:14px 26px;display:flex;align-items:center;gap:20px;flex-wrap:wrap;box-shadow:0 2px 14px rgba(74,18,32,.25)}
+  .brand{font-family:'Cormorant Garamond',serif;font-weight:600;font-size:1.4rem}
+  .brand-sub{font-size:.68rem;letter-spacing:.18em;text-transform:uppercase;color:var(--marrom-light);margin-top:-2px}
+  header .spacer{flex:1}
+  .hbtn{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.3);color:var(--creme);padding:8px 14px;border-radius:6px;cursor:pointer;font-size:.78rem;text-decoration:none;display:inline-flex;align-items:center;gap:6px;transition:background .15s}
+  .hbtn:hover{background:rgba(255,255,255,.22)}
+
+  nav.tabs{display:flex;gap:2px;background:var(--white);border-bottom:1px solid var(--creme-dark);padding:0 26px;overflow-x:auto}
+  .tab{padding:14px 18px;font-size:.82rem;font-weight:500;color:var(--text-light);cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap}
+  .tab.active{color:var(--bordo);border-bottom-color:var(--bordo);font-weight:600}
+
+  main{max-width:1140px;margin:0 auto;padding:28px 26px 60px}
+  .card{background:var(--white);border:1px solid var(--creme-dark);border-radius:12px;padding:22px;margin-bottom:18px}
+  .card h2{font-family:'Cormorant Garamond',serif;font-size:1.3rem;color:var(--bordo-dark);margin-bottom:14px}
+  .card p.hint{font-size:.82rem;color:var(--text-light);margin-bottom:14px}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px}
+  .field{display:flex;flex-direction:column;gap:4px}
+  .field label{font-size:.68rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-light);font-weight:500}
+  .inp,select.inp,textarea.inp{padding:9px 12px;border:1.5px solid var(--creme-dark);border-radius:7px;font-family:'Jost',sans-serif;font-size:.85rem;color:var(--text);background:var(--white)}
+  .inp:focus{outline:none;border-color:var(--marrom)}
+  .btn{background:var(--bordo);color:var(--creme);border:none;padding:10px 18px;border-radius:7px;font-size:.78rem;font-weight:600;letter-spacing:.05em;text-transform:uppercase;cursor:pointer;transition:background .15s}
+  .btn:hover{background:var(--bordo-dark)}
+  .btn:disabled{opacity:.5;cursor:default}
+  .btn-outline{background:none;border:1.5px solid var(--bordo);color:var(--bordo)}
+  .btn-outline:hover{background:var(--bordo);color:var(--creme)}
+  .btn-danger{background:none;border:none;color:#B43C3C;cursor:pointer;font-size:.85rem}
+  .btn-sm{padding:6px 12px;font-size:.72rem}
+
+  .table-wrap{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
+  table{width:100%;min-width:560px;border-collapse:collapse;font-size:.82rem}
+  th{text-align:left;padding:9px 10px;background:var(--creme);color:var(--text-light);font-size:.68rem;text-transform:uppercase;letter-spacing:.05em}
+  td{padding:9px 10px;border-top:1px solid var(--creme-dark);vertical-align:top}
+  tr.inativo td{color:var(--text-light);opacity:.6}
+  .badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:.68rem;font-weight:600;white-space:nowrap}
+  .badge-ativo{background:#E8F8F0;color:#27AE60}
+  .badge-manutencao{background:#FDF3E3;color:#B8791A}
+  .badge-retirado{background:#FDEDEC;color:#B43C3C}
+
+  .empty{text-align:center;padding:40px;color:var(--text-light);font-size:.85rem}
+  .loading{text-align:center;padding:30px;color:var(--text-light)}
+
+  .freezer-card{background:var(--white);border:1px solid var(--creme-dark);border-radius:12px;padding:16px 18px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+  .freezer-card .fnome{font-family:'Cormorant Garamond',serif;font-size:1.1rem;color:var(--bordo-dark);font-weight:600}
+  .freezer-card .fdet{font-size:.76rem;color:var(--text-light);margin-top:2px}
+  .freezer-card .facoes{display:flex;gap:8px;flex-wrap:wrap}
+
+  .check-line{display:flex;align-items:center;gap:8px;font-size:.85rem;margin-bottom:10px;cursor:pointer}
+  .check-line input{width:17px;height:17px}
+
+  .item-row{display:flex;gap:8px;align-items:flex-end;margin-bottom:8px;flex-wrap:wrap}
+  .item-row .field{flex:1;min-width:140px}
+  .item-row .qtd{max-width:100px}
+  .item-row .un{max-width:90px}
+
+  .foto-thumb{width:88px;height:88px;object-fit:cover;border-radius:8px;border:1px solid var(--creme-dark);cursor:pointer}
+  .foto-grid{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+
+  .visita-item{border-top:1px solid var(--creme-dark);padding:14px 0}
+  .visita-item:first-child{border-top:none}
+  .visita-head{display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;align-items:center}
+  .visita-flags{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+  .flag-pill{background:var(--creme);color:var(--marrom-dark);font-size:.68rem;padding:3px 9px;border-radius:20px}
+  .flag-pill.on{background:#E8F8F0;color:#27AE60}
+
+  .stat-box{display:flex;gap:18px;flex-wrap:wrap;margin-bottom:18px}
+  .stat{background:var(--creme);border-radius:10px;padding:18px 22px;min-width:170px}
+  .stat .num{font-family:'Cormorant Garamond',serif;font-size:2rem;color:var(--bordo-dark);font-weight:600;line-height:1}
+  .stat .lbl{font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-light);margin-top:6px}
+
+  .modal-overlay{display:none;position:fixed;inset:0;background:rgba(44,24,16,.5);z-index:500;align-items:center;justify-content:center;padding:20px}
+  .modal-overlay.show{display:flex}
+  .modal{width:100%;max-width:520px;max-height:88vh;overflow:auto;background:var(--white);border-radius:14px;padding:26px}
+  .modal h3{font-family:'Cormorant Garamond',serif;font-size:1.25rem;color:var(--bordo-dark);margin-bottom:14px}
+  .modal-actions{display:flex;gap:10px;margin-top:16px}
+  .modal-close{background:none;border:none;color:var(--marrom-dark);text-decoration:underline;cursor:pointer;font-size:.78rem;display:block;margin:14px auto 0}
+  .msg{font-size:.78rem;margin-top:8px;display:none}
+  .msg.show{display:block}
+  .msg.err{color:#B43C3C}
+  .msg.ok{color:#27AE60}
+
+  @media (max-width:600px){
+    header{padding:12px 16px}
+    nav.tabs{padding:0 16px}
+    main{padding:20px 16px 50px}
+    .card{padding:16px}
+  }
+</style>
+</head>
+<body>
+
+<div id="carregandoOverlay">Carregando…</div>
+
+<div id="appRoot">
+<header>
+  <div>
+    <div class="brand">LUNA <span style="font-size:.7em;font-weight:400">Freezers</span></div>
+    <div class="brand-sub">Freezers Externos</div>
+  </div>
+  <div class="spacer"></div>
+  <a href="https://thiagodlborges.github.io/Sistema-Luna/" class="hbtn">← Sistema Luna</a>
+  <button class="hbtn" onclick="sairApp()">Sair</button>
+</header>
+
+<nav class="tabs">
+  <div class="tab active" id="tabFreezers" data-tab="freezers" onclick="mudarTab('freezers')">🧊 Freezers</div>
+  <div class="tab" id="tabVisita" data-tab="visita" onclick="mudarTab('visita')">📝 Nova Visita</div>
+  <div class="tab" id="tabHistorico" data-tab="historico" onclick="mudarTab('historico')">📋 Histórico</div>
+  <div class="tab" id="tabRentabilidade" data-tab="rentabilidade" onclick="mudarTab('rentabilidade')">📊 Reposição</div>
+</nav>
+
+<main id="mainContent"><div class="loading">Carregando…</div></main>
+</div>
+
+<div class="modal-overlay" id="modalFreezer">
+  <div class="modal">
+    <h3 id="mfTitulo">Novo Freezer</h3>
+    <input type="hidden" id="mfId">
+    <div class="row">
+      <div class="field" style="flex:1"><label>Código / Patrimônio</label><input class="inp" id="mfCodigo"></div>
+    </div>
+    <div class="row">
+      <div class="field" style="flex:2"><label>Ponto de venda</label><input class="inp" id="mfPontoVenda" placeholder="Ex: Supermercado Bom Preço — Unidade Centro"></div>
+      <div class="field" style="flex:1"><label>Rede (opcional)</label><input class="inp" id="mfRede"></div>
+    </div>
+    <div class="row">
+      <div class="field" style="flex:2"><label>Endereço</label><input class="inp" id="mfEndereco"></div>
+      <div class="field" style="flex:1"><label>Cidade</label><input class="inp" id="mfCidade"></div>
+    </div>
+    <div class="row">
+      <div class="field" style="flex:1"><label>Repositor responsável</label><select class="inp" id="mfRepositor"></select></div>
+      <div class="field" style="flex:1"><label>Status</label>
+        <select class="inp" id="mfStatus">
+          <option value="ativo">Ativo</option>
+          <option value="manutencao">Manutenção</option>
+          <option value="retirado">Retirado</option>
+        </select>
+      </div>
+    </div>
+    <div class="field" style="margin-bottom:14px"><label>Observações</label><textarea class="inp" id="mfObs" rows="2"></textarea></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="salvarFreezer()">Salvar</button>
+      <button class="btn-outline btn" onclick="fecharModal('modalFreezer')">Cancelar</button>
+    </div>
+    <div class="msg" id="mfMsg"></div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modalFotos">
+  <div class="modal" style="max-width:640px">
+    <h3>Fotos da visita</h3>
+    <div id="fotosModalConteudo"></div>
+    <button class="modal-close" onclick="fecharModal('modalFotos')">Fechar</button>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+const SUPABASE_URL = 'https://pbuhwpcpdcnaheaywmdv.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBidWh3cGNwZGNuYWhlYXl3bWR2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYyNjU5MzksImV4cCI6MjA5MTg0MTkzOX0.Mg4PVg96ZiV3C2Rn0GLQU9c7ui_41OlU6Ldqn5jcvyY';
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+const PORTAL_URL = 'https://thiagodlborges.github.io/Sistema-Luna/';
+const BUCKET = 'freezers-visitas';
+const $ = id => document.getElementById(id);
+
+let meuPerfil = null;
+let souMaster = false;
+let souBackoffice = false;
+let souRepositor = false;
+let currentTab = 'freezers';
+let freezersCache = [];
+let produtosCache = null;
+let itensVisitaAtual = [];
+let fotosVisitaAtual = [];
+
+function esc(s){ return (s==null?'':String(s)).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function fmtData(d){ return d ? new Date(d+'T12:00').toLocaleDateString('pt-BR') : '—'; }
+function fmtDataHora(ts){ return ts ? new Date(ts).toLocaleString('pt-BR') : '—'; }
+function fmtMoeda(v){ return (Number(v)||0).toLocaleString('pt-BR', { style:'currency', currency:'BRL' }); }
+function fecharModal(id){ $(id).classList.remove('show'); }
+function showMsg(id, txt, tipo){ const m=$(id); m.textContent=txt; m.className='msg'+(txt?' show '+(tipo||''):''); }
+function labelStatus(s){ return s==='ativo'?'Ativo':s==='manutencao'?'Manutenção':'Retirado'; }
+function badgeStatus(s){ return '<span class="badge badge-'+s+'">'+labelStatus(s)+'</span>'; }
+
+async function sairApp(){
+  await sb.auth.signOut();
+  window.location.href = PORTAL_URL;
+}
+
+async function verificarAcessoEIniciar(){
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) { window.location.href = PORTAL_URL; return; }
+
+  const { data: ok, error } = await sb.rpc('tem_acesso', { p_slug: 'freezers' });
+  if (error || !ok) { await sb.auth.signOut(); window.location.href = PORTAL_URL; return; }
+
+  const { data: perfil } = await sb.from('perfis').select('*').eq('id', session.user.id).single();
+  if (!perfil) { window.location.href = PORTAL_URL; return; }
+  meuPerfil = perfil;
+
+  souMaster = perfil.tipo === 'master';
+  souBackoffice = souMaster || perfil.freezers_backoffice === true;
+  souRepositor = perfil.freezers_repositor === true;
+
+  if (!souBackoffice) {
+    // Repositor puro: sem tela de cadastro de freezer, só a própria operação.
+    $('tabFreezers').textContent = '🧊 Meus Freezers';
+  }
+
+  $('carregandoOverlay').style.display = 'none';
+  $('appRoot').style.display = 'block';
+  await mudarTab('freezers');
+}
+
+async function mudarTab(tab){
+  currentTab = tab;
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+  if (tab === 'freezers') await renderFreezers();
+  else if (tab === 'visita') await renderNovaVisita();
+  else if (tab === 'historico') await renderHistorico();
+  else if (tab === 'rentabilidade') await renderRentabilidade();
+}
+
+// ===================== FREEZERS =====================
+
+async function carregarFreezers(){
+  const { data, error } = await sb.from('freezers').select('*').order('ponto_venda');
+  freezersCache = error ? [] : (data || []);
+  return freezersCache;
+}
+
+async function renderFreezers(){
+  $('mainContent').innerHTML = '<div class="loading">Carregando…</div>';
+  const freezers = await carregarFreezers();
+
+  const botaoNovo = souBackoffice ? '<button class="btn" onclick="abrirModalFreezer()">+ Novo Freezer</button>' : '';
+
+  const lista = freezers.length ? freezers.map(f => (
+    '<div class="freezer-card">'+
+      '<div>'+
+        '<div class="fnome">'+esc(f.ponto_venda)+(f.rede?' <span style="font-size:.75rem;color:var(--text-light)">— '+esc(f.rede)+'</span>':'')+'</div>'+
+        '<div class="fdet">Código '+esc(f.codigo)+' · '+esc(f.cidade||'—')+' · Repositor: '+esc(f.repositor_nome||'—')+'</div>'+
+        '<div style="margin-top:6px">'+badgeStatus(f.status)+'</div>'+
+      '</div>'+
+      '<div class="facoes">'+
+        '<button class="btn btn-sm" onclick="irParaVisita(\''+f.id+'\')">📝 Nova visita</button>'+
+        (souBackoffice ? '<button class="btn-outline btn btn-sm" onclick="abrirModalFreezer(\''+f.id+'\')">Editar</button>' : '')+
+      '</div>'+
+    '</div>'
+  )).join('') : '<div class="empty">'+(souBackoffice ? 'Nenhum freezer cadastrado ainda.' : 'Você ainda não tem freezers na carteira.')+'</div>';
+
+  $('mainContent').innerHTML = '<div class="card"><h2>'+(souBackoffice?'Freezers':'Minha Carteira')+'</h2>'+botaoNovo+'<div style="margin-top:14px">'+lista+'</div></div>';
+}
+
+async function popularSelectRepositores(selecionadoId){
+  const { data } = await sb.from('perfis').select('id,nome').eq('freezers_repositor', true).order('nome');
+  const opts = (data||[]).map(p => '<option value="'+p.id+'" '+(p.id===selecionadoId?'selected':'')+'>'+esc(p.nome)+'</option>').join('');
+  $('mfRepositor').innerHTML = '<option value="">— sem repositor definido —</option>' + opts;
+}
+
+async function abrirModalFreezer(id){
+  $('mfMsg').className = 'msg';
+  await popularSelectRepositores(null);
+  if (id){
+    const f = freezersCache.find(x => x.id === id);
+    $('mfTitulo').textContent = 'Editar Freezer';
+    $('mfId').value = f.id;
+    $('mfCodigo').value = f.codigo || '';
+    $('mfPontoVenda').value = f.ponto_venda || '';
+    $('mfRede').value = f.rede || '';
+    $('mfEndereco').value = f.endereco || '';
+    $('mfCidade').value = f.cidade || '';
+    $('mfStatus').value = f.status || 'ativo';
+    $('mfObs').value = f.observacoes || '';
+    $('mfRepositor').value = f.repositor_id || '';
+  } else {
+    $('mfTitulo').textContent = 'Novo Freezer';
+    ['mfId','mfCodigo','mfPontoVenda','mfRede','mfEndereco','mfCidade','mfObs'].forEach(id2 => $(id2).value = '');
+    $('mfStatus').value = 'ativo';
+    $('mfRepositor').value = '';
+  }
+  $('modalFreezer').classList.add('show');
+}
+
+async function salvarFreezer(){
+  const id = $('mfId').value;
+  const repositorId = $('mfRepositor').value || null;
+  const repositorNome = repositorId ? $('mfRepositor').selectedOptions[0].textContent : null;
+  const payload = {
+    codigo: $('mfCodigo').value.trim(),
+    ponto_venda: $('mfPontoVenda').value.trim(),
+    rede: $('mfRede').value.trim() || null,
+    endereco: $('mfEndereco').value.trim() || null,
+    cidade: $('mfCidade').value.trim() || null,
+    status: $('mfStatus').value,
+    observacoes: $('mfObs').value.trim() || null,
+    repositor_id: repositorId,
+    repositor_nome: repositorNome,
+  };
+  if (!payload.codigo || !payload.ponto_venda){ showMsg('mfMsg','Preencha código e ponto de venda.','err'); return; }
+
+  const { error } = id
+    ? await sb.from('freezers').update(payload).eq('id', id)
+    : await sb.from('freezers').insert(payload);
+
+  if (error){ showMsg('mfMsg', 'Erro: '+error.message, 'err'); return; }
+  fecharModal('modalFreezer');
+  await renderFreezers();
+}
+
+function irParaVisita(freezerId){
+  mudarTab('visita').then(() => { $('nvFreezer').value = freezerId; });
+}
+
+// ===================== NOVA VISITA =====================
+
+async function carregarProdutosFreezer(){
+  if (produtosCache) return produtosCache;
+  const { data } = await sb.from('precificacao_produtos').select('id,nome,categoria')
+    .in('categoria', ['Picolés','Potes']).eq('origem','fabrica').eq('ativo', true).order('nome');
+  produtosCache = data || [];
+  return produtosCache;
+}
+
+async function renderNovaVisita(){
+  $('mainContent').innerHTML = '<div class="loading">Carregando…</div>';
+  const freezers = freezersCache.length ? freezersCache : await carregarFreezers();
+  await carregarProdutosFreezer();
+  itensVisitaAtual = [];
+  fotosVisitaAtual = [];
+
+  if (!freezers.length){
+    $('mainContent').innerHTML = '<div class="card"><div class="empty">Nenhum freezer disponível pra registrar visita.</div></div>';
+    return;
+  }
+
+  $('mainContent').innerHTML =
+    '<div class="card">'+
+      '<h2>Nova Visita</h2>'+
+      '<div class="row">'+
+        '<div class="field" style="flex:2"><label>Freezer</label><select class="inp" id="nvFreezer">'+
+          freezers.map(f => '<option value="'+f.id+'">'+esc(f.ponto_venda)+' — '+esc(f.codigo)+'</option>').join('')+
+        '</select></div>'+
+        '<div class="field"><label>Data da visita</label><input class="inp" type="date" id="nvData" value="'+new Date().toISOString().slice(0,10)+'"></div>'+
+      '</div>'+
+      '<label class="check-line"><input type="checkbox" id="nvHigienizacao"> Higienização realizada</label>'+
+      '<label class="check-line"><input type="checkbox" id="nvLimpeza"> Limpeza e arrumação (validades mais próximas na frente)</label>'+
+      '<div class="field" style="margin-bottom:14px"><label>Observações</label><textarea class="inp" id="nvObs" rows="2" placeholder="Ex: prateleira quebrada, cliente pediu sabor X..."></textarea></div>'+
+
+      '<h2 style="font-size:1.05rem;margin-top:22px">Pedido tirado nesta visita</h2>'+
+      '<p class="hint">Adicione os sabores/produtos que precisam ser repostos.</p>'+
+      '<div id="itensVisitaLista"></div>'+
+      '<button class="btn-outline btn btn-sm" onclick="adicionarItemVisita()">+ Adicionar item</button>'+
+
+      '<h2 style="font-size:1.05rem;margin-top:22px">Fotos da visita</h2>'+
+      '<input type="file" id="nvFotos" accept="image/*" capture="environment" multiple>'+
+      '<p class="hint" style="margin-top:6px">As fotos ficam disponíveis por 30 dias e depois são apagadas automaticamente.</p>'+
+
+      '<div class="modal-actions" style="margin-top:20px"><button class="btn" onclick="salvarVisita()" id="btnSalvarVisita">Salvar Visita</button></div>'+
+      '<div class="msg" id="nvMsg"></div>'+
+    '</div>';
+
+  renderItensVisita();
+}
+
+function renderItensVisita(){
+  const wrap = $('itensVisitaLista');
+  if (!itensVisitaAtual.length){
+    wrap.innerHTML = '<p class="hint">Nenhum item adicionado ainda.</p>';
+    return;
+  }
+  wrap.innerHTML = itensVisitaAtual.map((it, i) => (
+    '<div class="item-row">'+
+      '<div class="field"><label>Produto</label><select class="inp" onchange="itensVisitaAtual['+i+'].produto_id=this.value; itensVisitaAtual['+i+'].produto_nome=this.selectedOptions[0].textContent">'+
+        produtosCache.map(p => '<option value="'+p.id+'" '+(p.id===it.produto_id?'selected':'')+'>'+esc(p.nome)+'</option>').join('')+
+      '</select></div>'+
+      '<div class="field qtd"><label>Qtd</label><input class="inp" type="number" min="0.01" step="0.01" value="'+it.quantidade+'" onchange="itensVisitaAtual['+i+'].quantidade=this.value"></div>'+
+      '<div class="field un"><label>Unidade</label><select class="inp" onchange="itensVisitaAtual['+i+'].unidade=this.value">'+
+        ['un','caixa'].map(u => '<option value="'+u+'" '+(it.unidade===u?'selected':'')+'>'+u+'</option>').join('')+
+      '</select></div>'+
+      '<button class="btn-danger" onclick="removerItemVisita('+i+')">🗑️</button>'+
+    '</div>'
+  )).join('');
+}
+
+function adicionarItemVisita(){
+  if (!produtosCache.length){ alert('Nenhum produto de Picolés/Potes ativo encontrado na Precificação Fábrica.'); return; }
+  itensVisitaAtual.push({ produto_id: produtosCache[0].id, produto_nome: produtosCache[0].nome, quantidade: 1, unidade: 'un' });
+  renderItensVisita();
+}
+
+function removerItemVisita(i){
+  itensVisitaAtual.splice(i,1);
+  renderItensVisita();
+}
+
+async function salvarVisita(){
+  const freezerId = $('nvFreezer').value;
+  if (!freezerId){ showMsg('nvMsg','Selecione um freezer.','err'); return; }
+
+  const btn = $('btnSalvarVisita');
+  btn.disabled = true; btn.textContent = 'Salvando…';
+
+  const payload = {
+    p_freezer_id: freezerId,
+    p_repositor_nome: meuPerfil.nome,
+    p_data_visita: $('nvData').value,
+    p_higienizacao: $('nvHigienizacao').checked,
+    p_limpeza_arrumacao: $('nvLimpeza').checked,
+    p_observacoes: $('nvObs').value.trim() || null,
+    p_itens: itensVisitaAtual.map(it => ({ produto_id: it.produto_id, produto_nome: it.produto_nome, quantidade: Number(it.quantidade), unidade: it.unidade })),
+  };
+
+  const { data: visitaId, error } = await sb.rpc('registrar_visita_freezer', payload);
+  if (error){ showMsg('nvMsg', 'Erro: '+error.message, 'err'); btn.disabled=false; btn.textContent='Salvar Visita'; return; }
+
+  const arquivos = $('nvFotos').files;
+  if (arquivos && arquivos.length){
+    btn.textContent = 'Enviando fotos…';
+    for (const file of arquivos){
+      const caminho = freezerId+'/'+visitaId+'/'+Date.now()+'-'+file.name.replace(/[^a-zA-Z0-9._-]/g,'_');
+      const { error: upErr } = await sb.storage.from(BUCKET).upload(caminho, file);
+      if (upErr) console.error('Falha ao subir foto', file.name, upErr.message);
+    }
+  }
+
+  showMsg('nvMsg', 'Visita registrada com sucesso!', 'ok');
+  btn.disabled = false; btn.textContent = 'Salvar Visita';
+  setTimeout(() => mudarTab('visita'), 1200);
+}
+
+// ===================== HISTÓRICO =====================
+
+async function renderHistorico(){
+  $('mainContent').innerHTML = '<div class="loading">Carregando…</div>';
+  const freezers = freezersCache.length ? freezersCache : await carregarFreezers();
+
+  $('mainContent').innerHTML =
+    '<div class="card">'+
+      '<div class="row">'+
+        '<div class="field" style="flex:1"><label>Freezer</label><select class="inp" id="histFreezer" onchange="carregarHistorico()">'+
+          '<option value="">Todos os meus freezers</option>'+
+          freezers.map(f => '<option value="'+f.id+'">'+esc(f.ponto_venda)+' — '+esc(f.codigo)+'</option>').join('')+
+        '</select></div>'+
+      '</div>'+
+      '<div id="histConteudo"><div class="loading">Carregando…</div></div>'+
+    '</div>';
+
+  await carregarHistorico();
+}
+
+async function carregarHistorico(){
+  const freezerId = $('histFreezer').value;
+  let query = sb.from('freezer_visitas').select('*, freezers(ponto_venda, codigo)').order('data_visita', { ascending:false }).order('criado_em', { ascending:false }).limit(60);
+  if (freezerId) query = query.eq('freezer_id', freezerId);
+  const { data: visitas, error } = await query;
+  if (error){ $('histConteudo').innerHTML = '<div class="empty">Erro: '+esc(error.message)+'</div>'; return; }
+  if (!visitas || !visitas.length){ $('histConteudo').innerHTML = '<div class="empty">Nenhuma visita registrada ainda.</div>'; return; }
+
+  const visitaIds = visitas.map(v => v.id);
+  const { data: itens } = await sb.from('freezer_visita_itens').select('*').in('visita_id', visitaIds);
+  const itensPorVisita = {};
+  (itens||[]).forEach(it => { (itensPorVisita[it.visita_id] = itensPorVisita[it.visita_id]||[]).push(it); });
+
+  $('histConteudo').innerHTML = visitas.map(v => {
+    const seusItens = itensPorVisita[v.id] || [];
+    return (
+      '<div class="visita-item">'+
+        '<div class="visita-head">'+
+          '<div>'+
+            '<strong>'+esc(v.freezers ? v.freezers.ponto_venda : '—')+'</strong> — '+fmtData(v.data_visita)+
+            '<div style="font-size:.76rem;color:var(--text-light)">Repositor: '+esc(v.repositor_nome)+'</div>'+
+          '</div>'+
+          '<button class="btn-outline btn btn-sm" onclick="verFotosVisita(\''+v.freezer_id+'\',\''+v.id+'\')">📷 Ver fotos</button>'+
+        '</div>'+
+        '<div class="visita-flags">'+
+          '<span class="flag-pill '+(v.higienizacao?'on':'')+'">'+(v.higienizacao?'✓':'—')+' Higienização</span>'+
+          '<span class="flag-pill '+(v.limpeza_arrumacao?'on':'')+'">'+(v.limpeza_arrumacao?'✓':'—')+' Limpeza/arrumação</span>'+
+          '<span class="flag-pill '+(v.pedido_tirado?'on':'')+'">'+(v.pedido_tirado?'✓':'—')+' Pedido tirado</span>'+
+        '</div>'+
+        (v.observacoes ? '<p style="font-size:.8rem;margin-top:8px">'+esc(v.observacoes)+'</p>' : '')+
+        (seusItens.length ? '<div class="table-wrap" style="margin-top:10px"><table><thead><tr><th>Produto</th><th>Qtd</th><th>Un.</th></tr></thead><tbody>'+
+          seusItens.map(it => '<tr><td>'+esc(it.produto_nome)+'</td><td>'+it.quantidade+'</td><td>'+esc(it.unidade)+'</td></tr>').join('')+
+        '</tbody></table></div>' : '')+
+      '</div>'
+    );
+  }).join('');
+}
+
+async function verFotosVisita(freezerId, visitaId){
+  $('fotosModalConteudo').innerHTML = '<div class="loading">Carregando…</div>';
+  $('modalFotos').classList.add('show');
+  const caminho = freezerId+'/'+visitaId;
+  const { data: arquivos, error } = await sb.storage.from(BUCKET).list(caminho);
+  if (error || !arquivos || !arquivos.length){
+    $('fotosModalConteudo').innerHTML = '<div class="empty">Nenhuma foto nesta visita.</div>';
+    return;
+  }
+  const urls = await Promise.all(arquivos.map(async a => {
+    const { data } = await sb.storage.from(BUCKET).createSignedUrl(caminho+'/'+a.name, 3600);
+    return data ? data.signedUrl : null;
+  }));
+  $('fotosModalConteudo').innerHTML = '<div class="foto-grid">'+
+    urls.filter(Boolean).map(u => '<a href="'+u+'" target="_blank"><img class="foto-thumb" src="'+u+'"></a>').join('')+
+  '</div>';
+}
+
+// ===================== REPOSIÇÃO / RENTABILIDADE =====================
+
+async function renderRentabilidade(){
+  $('mainContent').innerHTML = '<div class="loading">Carregando…</div>';
+  const freezers = freezersCache.length ? freezersCache : await carregarFreezers();
+  const hoje = new Date();
+  const inicioMes = new Date(hoje.getFullYear(), hoje.getMonth(), 1).toISOString().slice(0,10);
+  const fimMes = new Date(hoje.getFullYear(), hoje.getMonth()+1, 0).toISOString().slice(0,10);
+
+  if (!freezers.length){
+    $('mainContent').innerHTML = '<div class="card"><div class="empty">Nenhum freezer disponível.</div></div>';
+    return;
+  }
+
+  $('mainContent').innerHTML =
+    '<div class="card">'+
+      '<h2>Reposição por Freezer</h2>'+
+      '<p class="hint">Volume pedido nas visitas (não é consumo real medido) — o valor é uma estimativa pelo preço fábrica → loja vigente.</p>'+
+      '<div class="row">'+
+        '<div class="field" style="flex:1"><label>Freezer</label><select class="inp" id="rtFreezer" onchange="carregarRentabilidade()">'+
+          freezers.map(f => '<option value="'+f.id+'">'+esc(f.ponto_venda)+' — '+esc(f.codigo)+'</option>').join('')+
+        '</select></div>'+
+        '<div class="field"><label>De</label><input class="inp" type="date" id="rtInicio" value="'+inicioMes+'" onchange="carregarRentabilidade()"></div>'+
+        '<div class="field"><label>Até</label><input class="inp" type="date" id="rtFim" value="'+fimMes+'" onchange="carregarRentabilidade()"></div>'+
+      '</div>'+
+      '<div id="rtConteudo"><div class="loading">Carregando…</div></div>'+
+    '</div>';
+
+  await carregarRentabilidade();
+}
+
+async function carregarRentabilidade(){
+  const freezerId = $('rtFreezer').value;
+  const inicio = $('rtInicio').value;
+  const fim = $('rtFim').value;
+  const { data, error } = await sb.rpc('freezer_reposicao_resumo', { p_freezer_id: freezerId, p_data_inicio: inicio, p_data_fim: fim });
+  if (error){ $('rtConteudo').innerHTML = '<div class="empty">Erro: '+esc(error.message)+'</div>'; return; }
+  if (!data || !data.length){ $('rtConteudo').innerHTML = '<div class="empty">Nenhuma reposição registrada no período.</div>'; return; }
+
+  const totalEstimado = data.reduce((a,r) => a + Number(r.valor_estimado||0), 0);
+
+  $('rtConteudo').innerHTML =
+    '<div class="stat-box"><div class="stat"><div class="num">'+fmtMoeda(totalEstimado)+'</div><div class="lbl">Valor estimado repost no período</div></div></div>'+
+    '<div class="table-wrap"><table><thead><tr><th>Produto</th><th>Qtd. reposta</th><th>Un.</th><th>Preço unit. (fábrica→loja)</th><th>Valor estimado</th></tr></thead><tbody>'+
+      data.map(r => '<tr><td>'+esc(r.produto_nome)+'</td><td>'+r.quantidade_total+'</td><td>'+esc(r.unidade)+'</td><td>'+(r.preco_venda_unit?fmtMoeda(r.preco_venda_unit):'—')+'</td><td>'+fmtMoeda(r.valor_estimado)+'</td></tr>').join('')+
+    '</tbody></table></div>';
+}
+
+verificarAcessoEIniciar();
+</script>
+</body>
+</html>
