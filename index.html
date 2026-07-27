@@ -168,6 +168,32 @@
   </div>
 </div>
 
+<div class="modal-overlay" id="modalProdutoSimples">
+  <div class="modal">
+    <h3 id="mpsTitulo">Novo Produto (Preço Simples)</h3>
+    <input type="hidden" id="mpsId">
+    <div class="field" style="margin-bottom:10px"><label>Nome</label><input class="inp" id="mpsNome" placeholder="Ex: Picolé Yeez Manga"></div>
+    <div class="row">
+      <div class="field" style="flex:1"><label>Categoria</label>
+        <select class="inp" id="mpsCategoria">
+          <option value="Picolé">Picolé</option>
+          <option value="Pote">Pote</option>
+        </select>
+      </div>
+      <div class="field" style="flex:1"><label>Código (opcional)</label><input class="inp" id="mpsCodigo"></div>
+    </div>
+    <div class="row">
+      <div class="field" style="flex:1"><label>Preço (R$)</label><input class="inp" type="number" min="0" step="0.01" id="mpsPreco" value="0"></div>
+      <div class="field" style="flex:1"><label>Marca</label><input class="inp" id="mpsMarca" value="Yeez"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="salvarProdutoSimples()">Salvar</button>
+      <button class="btn-outline btn" onclick="fecharModal('modalProdutoSimples')">Cancelar</button>
+    </div>
+    <div class="msg" id="mpsMsg"></div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="modalFotos">
   <div class="modal" style="max-width:640px">
     <h3>Fotos da visita</h3>
@@ -271,7 +297,89 @@ async function renderFreezers(){
     '</div>'
   )).join('') : '<div class="empty">'+(souBackoffice ? 'Nenhum freezer cadastrado ainda.' : 'Você ainda não tem freezers na carteira.')+'</div>';
 
-  $('mainContent').innerHTML = '<div class="card"><h2>'+(souBackoffice?'Freezers':'Minha Carteira')+'</h2>'+botaoNovo+'<div style="margin-top:14px">'+lista+'</div></div>';
+  const secaoSimples = souBackoffice ?
+    '<div class="card">'+
+      '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">'+
+        '<h2 style="margin:0">Produtos com Preço Simples (fora da Precificação)</h2>'+
+        '<button class="btn btn-sm" onclick="abrirModalProdutoSimples()">+ Novo Item</button>'+
+      '</div>'+
+      '<p class="hint" style="margin-top:6px">Pra itens que não passam pela Precificação Fábrica (ex: linha Yeez em descontinuação) — só um preço direto, editável na hora.</p>'+
+      '<div id="produtosSimplesLista" style="margin-top:12px" class="loading">Carregando…</div>'+
+    '</div>' : '';
+
+  $('mainContent').innerHTML = '<div class="card"><h2>'+(souBackoffice?'Freezers':'Minha Carteira')+'</h2>'+botaoNovo+'<div style="margin-top:14px">'+lista+'</div></div>'+secaoSimples;
+
+  if (souBackoffice) await renderProdutosSimples();
+}
+
+async function renderProdutosSimples(){
+  const { data, error } = await sb.from('freezer_produtos_simples').select('*').order('categoria').order('nome');
+  const el = $('produtosSimplesLista');
+  if (error){ el.innerHTML = '<div class="empty">Erro: '+esc(error.message)+'</div>'; return; }
+  if (!data || !data.length){ el.innerHTML = '<div class="empty">Nenhum produto simples cadastrado ainda.</div>'; return; }
+
+  el.innerHTML = '<div class="table-wrap"><table><thead><tr><th>Produto</th><th>Categoria</th><th>Código</th><th>Preço (R$)</th><th>Ativo</th><th></th></tr></thead><tbody>'+
+    data.map(p => (
+      '<tr'+(p.ativo?'':' class="inativo"')+'>'+
+        '<td>'+esc(p.nome)+'</td>'+
+        '<td>'+esc(p.categoria)+'</td>'+
+        '<td>'+esc(p.codigo||'—')+'</td>'+
+        '<td><input class="inp" type="number" min="0" step="0.01" value="'+Number(p.preco||0).toFixed(2)+'" style="max-width:110px" onchange="salvarPrecoSimples(\''+p.id+'\',this.value)"></td>'+
+        '<td><input type="checkbox" '+(p.ativo?'checked':'')+' onchange="salvarAtivoSimples(\''+p.id+'\',this.checked)"></td>'+
+        '<td><button class="btn-danger" onclick="excluirProdutoSimples(\''+p.id+'\')">🗑️</button></td>'+
+      '</tr>'
+    )).join('')+
+    '</tbody></table></div>';
+}
+
+async function salvarPrecoSimples(id, valor){
+  const preco = Number(valor);
+  if (isNaN(preco) || preco < 0) return;
+  const { error } = await sb.from('freezer_produtos_simples').update({ preco }).eq('id', id);
+  if (error) alert('Erro ao salvar preço: '+error.message);
+  produtosCache = null; // invalida cache combinado (fábrica + simples) usado na Nova Visita
+}
+
+async function salvarAtivoSimples(id, ativo){
+  const { error } = await sb.from('freezer_produtos_simples').update({ ativo }).eq('id', id);
+  if (error) alert('Erro ao salvar: '+error.message);
+  produtosCache = null;
+}
+
+async function excluirProdutoSimples(id){
+  if (!confirm('Excluir este produto? Isso não apaga visitas/pedidos já registrados com ele.')) return;
+  const { error } = await sb.from('freezer_produtos_simples').delete().eq('id', id);
+  if (error){ alert('Erro ao excluir: '+error.message); return; }
+  produtosCache = null;
+  await renderProdutosSimples();
+}
+
+function abrirModalProdutoSimples(){
+  $('mpsMsg').className = 'msg';
+  $('mpsId').value = '';
+  $('mpsTitulo').textContent = 'Novo Produto (Preço Simples)';
+  $('mpsNome').value = '';
+  $('mpsCategoria').value = 'Picolé';
+  $('mpsCodigo').value = '';
+  $('mpsPreco').value = '0';
+  $('mpsMarca').value = 'Yeez';
+  $('modalProdutoSimples').classList.add('show');
+}
+
+async function salvarProdutoSimples(){
+  const nome = $('mpsNome').value.trim();
+  const categoria = $('mpsCategoria').value;
+  const codigo = $('mpsCodigo').value.trim() || null;
+  const preco = Number($('mpsPreco').value) || 0;
+  const marca = $('mpsMarca').value.trim() || null;
+  if (!nome){ showMsg('mpsMsg','Informe o nome do produto.','err'); return; }
+
+  const { error } = await sb.from('freezer_produtos_simples').insert({ nome, categoria, codigo, preco, marca });
+  if (error){ showMsg('mpsMsg','Erro: '+error.message,'err'); return; }
+
+  fecharModal('modalProdutoSimples');
+  produtosCache = null;
+  await renderProdutosSimples();
 }
 
 async function popularSelectRepositores(selecionadoId){
@@ -338,9 +446,13 @@ function irParaVisita(freezerId){
 
 async function carregarProdutosFreezer(){
   if (produtosCache) return produtosCache;
-  const { data } = await sb.from('precificacao_produtos').select('id,nome,categoria')
-    .in('categoria', ['Picolés','Potes']).eq('origem','fabrica').eq('ativo', true).order('nome');
-  produtosCache = data || [];
+  const [fabR, avulsoR] = await Promise.all([
+    sb.from('precificacao_produtos').select('id,nome,categoria').in('categoria', ['Picolés','Potes']).eq('origem','fabrica').eq('ativo', true).order('nome'),
+    sb.from('freezer_produtos_simples').select('id,nome,categoria,preco').eq('ativo', true).order('nome'),
+  ]);
+  const fab = (fabR.data || []).map(p => ({ produto_id: p.id, produto_avulso_id: null, nome: p.nome, rotulo: p.nome }));
+  const avl = (avulsoR.data || []).map(p => ({ produto_id: null, produto_avulso_id: p.id, nome: p.nome, rotulo: p.nome+' (Yeez — fora da Precificação)' }));
+  produtosCache = fab.concat(avl);
   return produtosCache;
 }
 
@@ -370,7 +482,8 @@ async function renderNovaVisita(){
       '<div class="field" style="margin-bottom:14px"><label>Observações</label><textarea class="inp" id="nvObs" rows="2" placeholder="Ex: prateleira quebrada, cliente pediu sabor X..."></textarea></div>'+
 
       '<h2 style="font-size:1.05rem;margin-top:22px">Pedido tirado nesta visita</h2>'+
-      '<p class="hint">Adicione os sabores/produtos que precisam ser repostos.</p>'+
+      '<p class="hint">Adicione os sabores/produtos que precisam ser repostos. Digite pra buscar — itens marcados "Yeez" são da linha em descontinuação, com preço simples fora da Precificação.</p>'+
+      '<datalist id="produtosVisitaDatalist">'+produtosCache.map(p => '<option value="'+esc(p.rotulo)+'">').join('')+'</datalist>'+
       '<div id="itensVisitaLista"></div>'+
       '<button class="btn-outline btn btn-sm" onclick="adicionarItemVisita()">+ Adicionar item</button>'+
 
@@ -393,9 +506,7 @@ function renderItensVisita(){
   }
   wrap.innerHTML = itensVisitaAtual.map((it, i) => (
     '<div class="item-row">'+
-      '<div class="field"><label>Produto</label><select class="inp" onchange="itensVisitaAtual['+i+'].produto_id=this.value; itensVisitaAtual['+i+'].produto_nome=this.selectedOptions[0].textContent">'+
-        produtosCache.map(p => '<option value="'+p.id+'" '+(p.id===it.produto_id?'selected':'')+'>'+esc(p.nome)+'</option>').join('')+
-      '</select></div>'+
+      '<div class="field"><label>Produto</label><input class="inp" type="text" list="produtosVisitaDatalist" autocomplete="off" value="'+esc(it.produto_nome||'')+'" placeholder="Digite pra buscar…" oninput="atualizarItemProduto('+i+',this.value)"></div>'+
       '<div class="field qtd"><label>Qtd</label><input class="inp" type="number" min="0.01" step="0.01" value="'+it.quantidade+'" onchange="itensVisitaAtual['+i+'].quantidade=this.value"></div>'+
       '<div class="field un"><label>Unidade</label><select class="inp" onchange="itensVisitaAtual['+i+'].unidade=this.value">'+
         ['un','caixa'].map(u => '<option value="'+u+'" '+(it.unidade===u?'selected':'')+'>'+u+'</option>').join('')+
@@ -405,9 +516,17 @@ function renderItensVisita(){
   )).join('');
 }
 
+function atualizarItemProduto(i, texto){
+  const item = produtosCache.find(p => p.rotulo === texto);
+  if (!item) return; // ainda digitando, não bateu com nenhuma opção do datalist ainda
+  itensVisitaAtual[i].produto_id = item.produto_id;
+  itensVisitaAtual[i].produto_avulso_id = item.produto_avulso_id;
+  itensVisitaAtual[i].produto_nome = item.nome;
+}
+
 function adicionarItemVisita(){
-  if (!produtosCache.length){ alert('Nenhum produto de Picolés/Potes ativo encontrado na Precificação Fábrica.'); return; }
-  itensVisitaAtual.push({ produto_id: produtosCache[0].id, produto_nome: produtosCache[0].nome, quantidade: 1, unidade: 'un' });
+  if (!produtosCache.length){ alert('Nenhum produto de Picolés/Potes (nem da linha Yeez) disponível.'); return; }
+  itensVisitaAtual.push({ produto_id: null, produto_avulso_id: null, produto_nome: '', quantidade: 1, unidade: 'un' });
   renderItensVisita();
 }
 
@@ -420,6 +539,9 @@ async function salvarVisita(){
   const freezerId = $('nvFreezer').value;
   if (!freezerId){ showMsg('nvMsg','Selecione um freezer.','err'); return; }
 
+  const itemSemProduto = itensVisitaAtual.some(it => !it.produto_id && !it.produto_avulso_id);
+  if (itemSemProduto){ showMsg('nvMsg','Escolha um produto válido da lista (digite e selecione uma sugestão) pra cada item, ou remova a linha.','err'); return; }
+
   const btn = $('btnSalvarVisita');
   btn.disabled = true; btn.textContent = 'Salvando…';
 
@@ -430,7 +552,7 @@ async function salvarVisita(){
     p_higienizacao: $('nvHigienizacao').checked,
     p_limpeza_arrumacao: $('nvLimpeza').checked,
     p_observacoes: $('nvObs').value.trim() || null,
-    p_itens: itensVisitaAtual.map(it => ({ produto_id: it.produto_id, produto_nome: it.produto_nome, quantidade: Number(it.quantidade), unidade: it.unidade })),
+    p_itens: itensVisitaAtual.map(it => ({ produto_id: it.produto_id, produto_avulso_id: it.produto_avulso_id, produto_nome: it.produto_nome, quantidade: Number(it.quantidade), unidade: it.unidade })),
   };
 
   const { data: visitaId, error } = await sb.rpc('registrar_visita_freezer', payload);
