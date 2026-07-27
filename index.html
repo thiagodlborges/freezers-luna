@@ -283,6 +283,30 @@ async function renderFreezers(){
 
   const botaoNovo = souBackoffice ? '<button class="btn" onclick="abrirModalFreezer()">+ Novo Freezer</button>' : '';
 
+  const secaoSimples = souBackoffice ?
+    '<div class="card">'+
+      '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">'+
+        '<h2 style="margin:0">Produtos com Preço Simples (fora da Precificação)</h2>'+
+        '<button class="btn btn-sm" onclick="abrirModalProdutoSimples()">+ Novo Item</button>'+
+      '</div>'+
+      '<p class="hint" style="margin-top:6px">Pra itens que não passam pela Precificação Fábrica (ex: linha Yeez em descontinuação) — só um preço direto, editável na hora.</p>'+
+      '<div id="produtosSimplesLista" style="margin-top:12px" class="loading">Carregando…</div>'+
+    '</div>' : '';
+
+  $('mainContent').innerHTML = '<div class="card"><h2>'+(souBackoffice?'Freezers':'Minha Carteira')+'</h2>'+botaoNovo+
+    '<div class="field" style="margin-top:14px"><input class="inp" type="text" id="freezerBusca" placeholder="Buscar por nome, código, rede ou cidade…" oninput="renderFreezersLista()"></div>'+
+    '<div id="freezersListaWrap" style="margin-top:10px"></div></div>'+secaoSimples;
+
+  renderFreezersLista();
+  if (souBackoffice) await renderProdutosSimples();
+}
+
+function renderFreezersLista(){
+  const termo = ($('freezerBusca').value || '').toLowerCase().trim();
+  const freezers = termo
+    ? freezersCache.filter(f => (f.ponto_venda+' '+f.codigo+' '+(f.rede||'')+' '+(f.cidade||'')).toLowerCase().includes(termo))
+    : freezersCache;
+
   const lista = freezers.length ? freezers.map(f => (
     '<div class="freezer-card">'+
       '<div>'+
@@ -295,21 +319,9 @@ async function renderFreezers(){
         (souBackoffice ? '<button class="btn-outline btn btn-sm" onclick="abrirModalFreezer(\''+f.id+'\')">Editar</button>' : '')+
       '</div>'+
     '</div>'
-  )).join('') : '<div class="empty">'+(souBackoffice ? 'Nenhum freezer cadastrado ainda.' : 'Você ainda não tem freezers na carteira.')+'</div>';
+  )).join('') : '<div class="empty">'+(termo ? 'Nenhum freezer encontrado pra "'+esc(termo)+'".' : (souBackoffice ? 'Nenhum freezer cadastrado ainda.' : 'Você ainda não tem freezers na carteira.'))+'</div>';
 
-  const secaoSimples = souBackoffice ?
-    '<div class="card">'+
-      '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">'+
-        '<h2 style="margin:0">Produtos com Preço Simples (fora da Precificação)</h2>'+
-        '<button class="btn btn-sm" onclick="abrirModalProdutoSimples()">+ Novo Item</button>'+
-      '</div>'+
-      '<p class="hint" style="margin-top:6px">Pra itens que não passam pela Precificação Fábrica (ex: linha Yeez em descontinuação) — só um preço direto, editável na hora.</p>'+
-      '<div id="produtosSimplesLista" style="margin-top:12px" class="loading">Carregando…</div>'+
-    '</div>' : '';
-
-  $('mainContent').innerHTML = '<div class="card"><h2>'+(souBackoffice?'Freezers':'Minha Carteira')+'</h2>'+botaoNovo+'<div style="margin-top:14px">'+lista+'</div></div>'+secaoSimples;
-
-  if (souBackoffice) await renderProdutosSimples();
+  $('freezersListaWrap').innerHTML = lista;
 }
 
 async function renderProdutosSimples(){
