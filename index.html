@@ -126,10 +126,12 @@
 
 <nav class="tabs">
   <div class="tab active" id="tabFreezers" data-tab="freezers" onclick="mudarTab('freezers')">🧊 Freezers</div>
+  <div class="tab" id="tabPrecificacaoFreezers" data-tab="precificacao" onclick="mudarTab('precificacao')">💲 Precificação</div>
   <div class="tab" id="tabVisita" data-tab="visita" onclick="mudarTab('visita')">📝 Nova Visita</div>
   <div class="tab" id="tabHistorico" data-tab="historico" onclick="mudarTab('historico')">📋 Histórico</div>
   <div class="tab" id="tabRentabilidade" data-tab="rentabilidade" onclick="mudarTab('rentabilidade')">📊 Reposição</div>
   <div class="tab" id="tabPainel" data-tab="painel" onclick="mudarTab('painel')">📈 Painel</div>
+  <div class="tab" id="tabVendasDia" data-tab="vendasdia" onclick="mudarTab('vendasdia')">🧾 Vendas do Dia</div>
 </nav>
 
 <main id="mainContent"><div class="loading">Carregando…</div></main>
@@ -278,6 +280,8 @@ async function verificarAcessoEIniciar(){
     // Repositor puro: sem tela de cadastro de freezer, só a própria operação.
     $('tabFreezers').textContent = '🧊 Meus Freezers';
     $('tabPainel').style.display = 'none';
+    $('tabPrecificacaoFreezers').style.display = 'none';
+    $('tabVendasDia').style.display = 'none';
   }
 
   $('carregandoOverlay').style.display = 'none';
@@ -289,10 +293,12 @@ async function mudarTab(tab){
   currentTab = tab;
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
   if (tab === 'freezers') await renderFreezers();
+  else if (tab === 'precificacao') await renderPrecificacaoFreezers();
   else if (tab === 'visita') await renderNovaVisita();
   else if (tab === 'historico') await renderHistorico();
   else if (tab === 'rentabilidade') await renderRentabilidade();
   else if (tab === 'painel') await renderPainel();
+  else if (tab === 'vendasdia') await renderVendasDia();
 }
 
 // ===================== FREEZERS =====================
@@ -309,7 +315,15 @@ async function renderFreezers(){
 
   const botaoNovo = souBackoffice ? '<button class="btn" onclick="abrirModalFreezer()">+ Novo Freezer</button>' : '';
 
-  const secaoSimples = souBackoffice ?
+  $('mainContent').innerHTML = '<div class="card"><h2>'+(souBackoffice?'Freezers':'Minha Carteira')+'</h2>'+botaoNovo+
+    '<div class="field" style="margin-top:14px"><input class="inp" type="text" id="freezerBusca" placeholder="Buscar por nome, código, rede ou cidade…" oninput="renderFreezersLista()"></div>'+
+    '<div id="freezersListaWrap" style="margin-top:10px"></div></div>';
+
+  renderFreezersLista();
+}
+
+async function renderPrecificacaoFreezers(){
+  $('mainContent').innerHTML =
     '<div class="card">'+
       '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">'+
         '<h2 style="margin:0">Produtos com Preço Simples (fora da Precificação)</h2>'+
@@ -325,14 +339,10 @@ async function renderFreezers(){
       '</div>'+
       '<p class="hint" style="margin-top:6px">Pra clientes que pagam preço diferente do padrão nos produtos simples (Yeez etc.). Associe a tabela ao cliente na tela de editar freezer.</p>'+
       '<div id="tabelasPrecoLista" style="margin-top:12px" class="loading">Carregando…</div>'+
-    '</div>' : '';
+    '</div>';
 
-  $('mainContent').innerHTML = '<div class="card"><h2>'+(souBackoffice?'Freezers':'Minha Carteira')+'</h2>'+botaoNovo+
-    '<div class="field" style="margin-top:14px"><input class="inp" type="text" id="freezerBusca" placeholder="Buscar por nome, código, rede ou cidade…" oninput="renderFreezersLista()"></div>'+
-    '<div id="freezersListaWrap" style="margin-top:10px"></div></div>'+secaoSimples;
-
-  renderFreezersLista();
-  if (souBackoffice){ await renderProdutosSimples(); await renderTabelasPreco(); }
+  await renderProdutosSimples();
+  await renderTabelasPreco();
 }
 
 function renderFreezersLista(){
@@ -955,6 +965,56 @@ function desenharGraficosPainel(serie, ranking){
     data: { labels: ranking.map(r=>r.produto_nome), datasets: [{ label:'Quantidade pedida', data: ranking.map(r=>Number(r.quantidade_total)), backgroundColor:'#6B1E2E', borderRadius:5 }] },
     options: { indexAxis:'y', plugins:{legend:{display:false}}, scales:{ x:{ beginAtZero:true } } },
   });
+}
+
+// ===================== VENDAS DO DIA (pra emissão de NF) =====================
+async function renderVendasDia(){
+  const hoje = new Date().toISOString().slice(0,10);
+  $('mainContent').innerHTML =
+    '<div class="card">'+
+      '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">'+
+        '<h2 style="margin:0">Vendas do Dia</h2>'+
+        '<div style="display:flex;gap:8px;align-items:center">'+
+          '<input class="inp" type="date" id="vdData" value="'+hoje+'" onchange="carregarVendasDia()">'+
+          '<button class="btn-outline btn btn-sm" onclick="window.print()">🖨️ Imprimir</button>'+
+        '</div>'+
+      '</div>'+
+      '<p class="hint">Pedidos tirados nas visitas do dia, agrupados por cliente — separado com o que precisa pra lançar a nota fiscal (razão social, endereço, itens e valores).</p>'+
+      '<div id="vdConteudo" style="margin-top:14px"><div class="loading">Carregando…</div></div>'+
+    '</div>';
+  await carregarVendasDia();
+}
+
+async function carregarVendasDia(){
+  const data = $('vdData').value;
+  const { data: linhas, error } = await sb.rpc('freezer_vendas_do_dia', { p_data: data });
+  if (error){ $('vdConteudo').innerHTML = '<div class="empty">Erro: '+esc(error.message)+'</div>'; return; }
+  if (!linhas || !linhas.length){ $('vdConteudo').innerHTML = '<div class="empty">Nenhum pedido registrado nessa data.</div>'; return; }
+
+  const porFreezer = {};
+  linhas.forEach(l => { (porFreezer[l.freezer_id] = porFreezer[l.freezer_id] || { info: l, itens: [] }).itens.push(l); });
+
+  let totalGeral = 0;
+  const blocos = Object.values(porFreezer).map(grupo => {
+    const subtotal = grupo.itens.reduce((s,i) => s + Number(i.valor_total), 0);
+    totalGeral += subtotal;
+    return '<div class="card" style="background:var(--creme)">'+
+      '<div class="fnome">'+esc(grupo.info.nome_fantasia || grupo.info.ponto_venda)+'</div>'+
+      '<div class="fdet">'+
+        (grupo.info.razao_social ? 'Razão social: '+esc(grupo.info.razao_social)+' · ' : '')+
+        (grupo.info.codigo_cliente ? 'Código cliente: '+esc(grupo.info.codigo_cliente)+' · ' : '')+
+        esc(grupo.info.endereco||'—')+(grupo.info.cidade?', '+esc(grupo.info.cidade):'')+
+      '</div>'+
+      '<div class="table-wrap" style="margin-top:10px"><table><thead><tr><th>Produto</th><th>Qtd</th><th>Un.</th><th>Valor unit.</th><th>Total</th></tr></thead><tbody>'+
+        grupo.itens.map(i => '<tr><td>'+esc(i.produto_nome)+'</td><td>'+i.quantidade+'</td><td>'+esc(i.unidade)+'</td><td>'+fmtMoeda(i.valor_unitario)+'</td><td>'+fmtMoeda(i.valor_total)+'</td></tr>').join('')+
+        '<tr><td colspan="4" style="text-align:right;font-weight:600">Subtotal</td><td style="font-weight:600">'+fmtMoeda(subtotal)+'</td></tr>'+
+      '</tbody></table></div>'+
+    '</div>';
+  }).join('');
+
+  $('vdConteudo').innerHTML =
+    '<div class="stat-box"><div class="stat"><div class="num">'+fmtMoeda(totalGeral)+'</div><div class="lbl">Total geral do dia ('+Object.keys(porFreezer).length+' cliente(s))</div></div></div>'+
+    blocos;
 }
 
 verificarAcessoEIniciar();
