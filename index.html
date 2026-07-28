@@ -129,6 +129,7 @@
   <div class="tab" id="tabVisita" data-tab="visita" onclick="mudarTab('visita')">📝 Nova Visita</div>
   <div class="tab" id="tabHistorico" data-tab="historico" onclick="mudarTab('historico')">📋 Histórico</div>
   <div class="tab" id="tabRentabilidade" data-tab="rentabilidade" onclick="mudarTab('rentabilidade')">📊 Reposição</div>
+  <div class="tab" id="tabPainel" data-tab="painel" onclick="mudarTab('painel')">📈 Painel</div>
 </nav>
 
 <main id="mainContent"><div class="loading">Carregando…</div></main>
@@ -139,10 +140,16 @@
     <h3 id="mfTitulo">Novo Freezer</h3>
     <input type="hidden" id="mfId">
     <div class="row">
-      <div class="field" style="flex:1"><label>Código / Patrimônio</label><input class="inp" id="mfCodigo"></div>
+      <div class="field" style="flex:1"><label>Nome Fantasia</label><input class="inp" id="mfNomeFantasia" placeholder="Ex: Supermercado Bom Preço — Unidade Centro"></div>
+      <div class="field" style="flex:1"><label>Razão Social</label><input class="inp" id="mfRazaoSocial"></div>
     </div>
     <div class="row">
-      <div class="field" style="flex:2"><label>Ponto de venda</label><input class="inp" id="mfPontoVenda" placeholder="Ex: Supermercado Bom Preço — Unidade Centro"></div>
+      <div class="field" style="flex:2"><label>Ponto de venda (nome de exibição)</label><input class="inp" id="mfPontoVenda"></div>
+      <div class="field" style="flex:1"><label>Nº da loja (na rede)</label><input class="inp" id="mfNumeroLoja" placeholder="Ex: 205"></div>
+    </div>
+    <div class="row">
+      <div class="field" style="flex:1"><label>Código do cliente</label><input class="inp" id="mfCodigoCliente"></div>
+      <div class="field" style="flex:1"><label>Nº de patrimônio (equipamento)</label><input class="inp" id="mfNumeroPatrimonio"></div>
       <div class="field" style="flex:1"><label>Rede (opcional)</label><input class="inp" id="mfRede"></div>
     </div>
     <div class="row">
@@ -159,6 +166,7 @@
         </select>
       </div>
     </div>
+    <div class="field" style="margin-bottom:10px"><label>Tabela de preço (produtos fora da Precificação, ex: Yeez)</label><select class="inp" id="mfTabelaPreco"></select></div>
     <div class="field" style="margin-bottom:14px"><label>Observações</label><textarea class="inp" id="mfObs" rows="2"></textarea></div>
     <div class="modal-actions">
       <button class="btn" onclick="salvarFreezer()">Salvar</button>
@@ -194,6 +202,21 @@
   </div>
 </div>
 
+<div class="modal-overlay" id="modalTabelaPreco">
+  <div class="modal" style="max-width:560px">
+    <h3 id="tpTitulo">Nova Tabela de Preço</h3>
+    <input type="hidden" id="tpId">
+    <div class="field" style="margin-bottom:12px"><label>Nome da tabela</label><input class="inp" id="tpNome" placeholder="Ex: Tabela Hirota"></div>
+    <p class="hint" style="margin-bottom:8px">Deixe em branco os produtos que devem usar o preço padrão. Só preencha onde esse cliente paga diferente.</p>
+    <div id="tpItensLista" style="max-height:340px;overflow-y:auto"></div>
+    <div class="modal-actions" style="margin-top:14px">
+      <button class="btn" onclick="salvarTabelaPreco()">Salvar</button>
+      <button class="btn-outline btn" onclick="fecharModal('modalTabelaPreco')">Cancelar</button>
+    </div>
+    <div class="msg" id="tpMsg"></div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="modalFotos">
   <div class="modal" style="max-width:640px">
     <h3>Fotos da visita</h3>
@@ -202,6 +225,7 @@
   </div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 const SUPABASE_URL = 'https://pbuhwpcpdcnaheaywmdv.supabase.co';
@@ -253,6 +277,7 @@ async function verificarAcessoEIniciar(){
   if (!souBackoffice) {
     // Repositor puro: sem tela de cadastro de freezer, só a própria operação.
     $('tabFreezers').textContent = '🧊 Meus Freezers';
+    $('tabPainel').style.display = 'none';
   }
 
   $('carregandoOverlay').style.display = 'none';
@@ -267,6 +292,7 @@ async function mudarTab(tab){
   else if (tab === 'visita') await renderNovaVisita();
   else if (tab === 'historico') await renderHistorico();
   else if (tab === 'rentabilidade') await renderRentabilidade();
+  else if (tab === 'painel') await renderPainel();
 }
 
 // ===================== FREEZERS =====================
@@ -289,8 +315,16 @@ async function renderFreezers(){
         '<h2 style="margin:0">Produtos com Preço Simples (fora da Precificação)</h2>'+
         '<button class="btn btn-sm" onclick="abrirModalProdutoSimples()">+ Novo Item</button>'+
       '</div>'+
-      '<p class="hint" style="margin-top:6px">Pra itens que não passam pela Precificação Fábrica (ex: linha Yeez em descontinuação) — só um preço direto, editável na hora.</p>'+
+      '<p class="hint" style="margin-top:6px">Pra itens que não passam pela Precificação Fábrica (ex: linha Yeez em descontinuação) — só um preço direto, editável na hora. Esse é o preço padrão; um cliente pode ter preço diferente via Tabela de Preço abaixo.</p>'+
       '<div id="produtosSimplesLista" style="margin-top:12px" class="loading">Carregando…</div>'+
+    '</div>'+
+    '<div class="card">'+
+      '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">'+
+        '<h2 style="margin:0">Tabelas de Preço por Cliente</h2>'+
+        '<button class="btn btn-sm" onclick="abrirModalTabelaPreco()">+ Nova Tabela</button>'+
+      '</div>'+
+      '<p class="hint" style="margin-top:6px">Pra clientes que pagam preço diferente do padrão nos produtos simples (Yeez etc.). Associe a tabela ao cliente na tela de editar freezer.</p>'+
+      '<div id="tabelasPrecoLista" style="margin-top:12px" class="loading">Carregando…</div>'+
     '</div>' : '';
 
   $('mainContent').innerHTML = '<div class="card"><h2>'+(souBackoffice?'Freezers':'Minha Carteira')+'</h2>'+botaoNovo+
@@ -298,13 +332,13 @@ async function renderFreezers(){
     '<div id="freezersListaWrap" style="margin-top:10px"></div></div>'+secaoSimples;
 
   renderFreezersLista();
-  if (souBackoffice) await renderProdutosSimples();
+  if (souBackoffice){ await renderProdutosSimples(); await renderTabelasPreco(); }
 }
 
 function renderFreezersLista(){
   const termo = ($('freezerBusca').value || '').toLowerCase().trim();
   const freezers = termo
-    ? freezersCache.filter(f => (f.ponto_venda+' '+f.codigo+' '+(f.rede||'')+' '+(f.cidade||'')).toLowerCase().includes(termo))
+    ? freezersCache.filter(f => (f.ponto_venda+' '+f.codigo+' '+(f.rede||'')+' '+(f.cidade||'')+' '+(f.observacoes||'')).toLowerCase().includes(termo))
     : freezersCache;
 
   const lista = freezers.length ? freezers.map(f => (
@@ -394,6 +428,101 @@ async function salvarProdutoSimples(){
   await renderProdutosSimples();
 }
 
+// ── TABELAS DE PREÇO POR CLIENTE ──────────────────────────
+async function renderTabelasPreco(){
+  const { data, error } = await sb.from('freezer_tabelas_preco').select('*').order('nome');
+  const el = $('tabelasPrecoLista');
+  if (error){ el.innerHTML = '<div class="empty">Erro: '+esc(error.message)+'</div>'; return; }
+  if (!data || !data.length){ el.innerHTML = '<div class="empty">Nenhuma tabela de preço cadastrada ainda.</div>'; return; }
+
+  const { data: contagens } = await sb.from('freezer_tabela_preco_itens').select('tabela_id');
+  const qtdPorTabela = {};
+  (contagens||[]).forEach(c => { qtdPorTabela[c.tabela_id] = (qtdPorTabela[c.tabela_id]||0) + 1; });
+
+  el.innerHTML = '<div class="table-wrap"><table><thead><tr><th>Nome</th><th>Itens com preço especial</th><th>Status</th><th></th></tr></thead><tbody>'+
+    data.map(t => (
+      '<tr'+(t.ativo?'':' class="inativo"')+'>'+
+        '<td>'+esc(t.nome)+'</td>'+
+        '<td>'+(qtdPorTabela[t.id]||0)+'</td>'+
+        '<td>'+(t.ativo?'<span class="badge badge-ativo">Ativa</span>':'<span class="badge badge-inativo">Inativa</span>')+'</td>'+
+        '<td style="white-space:nowrap">'+
+          '<button class="btn-outline btn btn-sm" onclick="abrirModalTabelaPreco(\''+t.id+'\')">Editar</button> '+
+          '<button class="btn-danger" onclick="toggleAtivoTabelaPreco(\''+t.id+'\','+(!t.ativo)+')">'+(t.ativo?'Desativar':'Reativar')+'</button>'+
+        '</td>'+
+      '</tr>'
+    )).join('')+
+  '</tbody></table></div>';
+}
+
+async function abrirModalTabelaPreco(id){
+  $('tpMsg').className = 'msg';
+  $('tpId').value = id || '';
+  $('tpTitulo').textContent = id ? 'Editar Tabela de Preço' : 'Nova Tabela de Preço';
+  $('tpNome').value = '';
+
+  const { data: produtos } = await sb.from('freezer_produtos_simples').select('*').eq('ativo', true).order('categoria').order('nome');
+  let itensExistentes = [];
+  if (id){
+    const { data: tabela } = await sb.from('freezer_tabelas_preco').select('*').eq('id', id).single();
+    if (tabela) $('tpNome').value = tabela.nome;
+    const { data: itens } = await sb.from('freezer_tabela_preco_itens').select('*').eq('tabela_id', id);
+    itensExistentes = itens || [];
+  }
+  const precoPorProduto = {}; itensExistentes.forEach(i => { precoPorProduto[i.produto_simples_id] = i.preco; });
+
+  $('tpItensLista').innerHTML = (produtos||[]).map(p => (
+    '<div class="row" style="margin-bottom:6px;align-items:center">'+
+      '<span style="flex:2;font-size:.82rem">'+esc(p.nome)+' <span style="color:var(--text-light);font-size:.72rem">(padrão '+fmtMoeda(p.preco)+')</span></span>'+
+      '<input class="inp" type="number" min="0" step="0.01" id="tpItem_'+p.id+'" value="'+(precoPorProduto[p.id]!=null?precoPorProduto[p.id]:'')+'" placeholder="usa padrão" style="flex:1">'+
+    '</div>'
+  )).join('');
+
+  $('modalTabelaPreco').classList.add('show');
+}
+
+async function salvarTabelaPreco(){
+  const id = $('tpId').value;
+  const nome = $('tpNome').value.trim();
+  if (!nome){ showMsg('tpMsg','Informe o nome da tabela.','err'); return; }
+
+  let tabelaId = id;
+  let error;
+  if (tabelaId){
+    ({ error } = await sb.from('freezer_tabelas_preco').update({ nome }).eq('id', tabelaId));
+  } else {
+    const { data: nova, error: errIns } = await sb.from('freezer_tabelas_preco').insert({ nome }).select('id').single();
+    error = errIns; tabelaId = nova ? nova.id : null;
+  }
+  if (error){ showMsg('tpMsg','Erro: '+error.message,'err'); return; }
+
+  const { data: produtos } = await sb.from('freezer_produtos_simples').select('id');
+  const itensParaSalvar = [];
+  (produtos||[]).forEach(p => {
+    const campo = $('tpItem_'+p.id);
+    if (campo && campo.value.trim() !== ''){
+      itensParaSalvar.push({ tabela_id: tabelaId, produto_simples_id: p.id, preco: Number(campo.value) });
+    }
+  });
+
+  await sb.from('freezer_tabela_preco_itens').delete().eq('tabela_id', tabelaId);
+  if (itensParaSalvar.length) await sb.from('freezer_tabela_preco_itens').insert(itensParaSalvar);
+
+  fecharModal('modalTabelaPreco');
+  await renderTabelasPreco();
+  await popularSelectTabelasPreco();
+}
+
+async function toggleAtivoTabelaPreco(id, ativo){
+  await sb.from('freezer_tabelas_preco').update({ ativo }).eq('id', id);
+  await renderTabelasPreco();
+}
+
+async function popularSelectTabelasPreco(selecionadoId){
+  const { data } = await sb.from('freezer_tabelas_preco').select('id,nome').eq('ativo', true).order('nome');
+  const opts = (data||[]).map(t => '<option value="'+t.id+'" '+(t.id===selecionadoId?'selected':'')+'>'+esc(t.nome)+'</option>').join('');
+  $('mfTabelaPreco').innerHTML = '<option value="">— preço padrão —</option>' + opts;
+}
+
 async function popularSelectRepositores(selecionadoId){
   const { data } = await sb.from('perfis').select('id,nome').eq('freezers_repositor', true).order('nome');
   const opts = (data||[]).map(p => '<option value="'+p.id+'" '+(p.id===selecionadoId?'selected':'')+'>'+esc(p.nome)+'</option>').join('');
@@ -403,12 +532,17 @@ async function popularSelectRepositores(selecionadoId){
 async function abrirModalFreezer(id){
   $('mfMsg').className = 'msg';
   await popularSelectRepositores(null);
+  await popularSelectTabelasPreco(id ? (freezersCache.find(x=>x.id===id)||{}).tabela_preco_id : null);
   if (id){
     const f = freezersCache.find(x => x.id === id);
     $('mfTitulo').textContent = 'Editar Freezer';
     $('mfId').value = f.id;
-    $('mfCodigo').value = f.codigo || '';
+    $('mfNomeFantasia').value = f.nome_fantasia || '';
+    $('mfRazaoSocial').value = f.razao_social || '';
     $('mfPontoVenda').value = f.ponto_venda || '';
+    $('mfNumeroLoja').value = f.numero_loja || '';
+    $('mfCodigoCliente').value = f.codigo_cliente || '';
+    $('mfNumeroPatrimonio').value = f.numero_patrimonio || '';
     $('mfRede').value = f.rede || '';
     $('mfEndereco').value = f.endereco || '';
     $('mfCidade').value = f.cidade || '';
@@ -417,7 +551,7 @@ async function abrirModalFreezer(id){
     $('mfRepositor').value = f.repositor_id || '';
   } else {
     $('mfTitulo').textContent = 'Novo Freezer';
-    ['mfId','mfCodigo','mfPontoVenda','mfRede','mfEndereco','mfCidade','mfObs'].forEach(id2 => $(id2).value = '');
+    ['mfId','mfNomeFantasia','mfRazaoSocial','mfPontoVenda','mfNumeroLoja','mfCodigoCliente','mfNumeroPatrimonio','mfRede','mfEndereco','mfCidade','mfObs'].forEach(id2 => $(id2).value = '');
     $('mfStatus').value = 'ativo';
     $('mfRepositor').value = '';
   }
@@ -428,9 +562,15 @@ async function salvarFreezer(){
   const id = $('mfId').value;
   const repositorId = $('mfRepositor').value || null;
   const repositorNome = repositorId ? $('mfRepositor').selectedOptions[0].textContent : null;
+  const codigoCliente = $('mfCodigoCliente').value.trim() || null;
+  const numeroPatrimonio = $('mfNumeroPatrimonio').value.trim() || null;
   const payload = {
-    codigo: $('mfCodigo').value.trim(),
+    nome_fantasia: $('mfNomeFantasia').value.trim() || null,
+    razao_social: $('mfRazaoSocial').value.trim() || null,
     ponto_venda: $('mfPontoVenda').value.trim(),
+    numero_loja: $('mfNumeroLoja').value.trim() || null,
+    codigo_cliente: codigoCliente,
+    numero_patrimonio: numeroPatrimonio,
     rede: $('mfRede').value.trim() || null,
     endereco: $('mfEndereco').value.trim() || null,
     cidade: $('mfCidade').value.trim() || null,
@@ -438,12 +578,19 @@ async function salvarFreezer(){
     observacoes: $('mfObs').value.trim() || null,
     repositor_id: repositorId,
     repositor_nome: repositorNome,
+    tabela_preco_id: $('mfTabelaPreco').value || null,
   };
-  if (!payload.codigo || !payload.ponto_venda){ showMsg('mfMsg','Preencha código e ponto de venda.','err'); return; }
+  if (!payload.ponto_venda){ showMsg('mfMsg','Preencha o ponto de venda.','err'); return; }
 
-  const { error } = id
-    ? await sb.from('freezers').update(payload).eq('id', id)
-    : await sb.from('freezers').insert(payload);
+  let error;
+  if (id){
+    ({ error } = await sb.from('freezers').update(payload).eq('id', id));
+  } else {
+    // código interno (chave única) — deriva do código do cliente/patrimônio
+    // quando informado, senão gera um identificador só pra garantir unicidade.
+    payload.codigo = numeroPatrimonio || (codigoCliente ? codigoCliente+'-'+Date.now().toString().slice(-5) : 'FZ-'+Date.now());
+    ({ error } = await sb.from('freezers').insert(payload));
+  }
 
   if (error){ showMsg('mfMsg', 'Erro: '+error.message, 'err'); return; }
   fecharModal('modalFreezer');
@@ -462,8 +609,18 @@ async function carregarProdutosFreezer(){
     sb.from('precificacao_produtos').select('id,nome,categoria').in('categoria', ['Picolés','Potes']).eq('origem','fabrica').eq('ativo', true).order('nome'),
     sb.from('freezer_produtos_simples').select('id,nome,categoria,preco').eq('ativo', true).order('nome'),
   ]);
-  const fab = (fabR.data || []).map(p => ({ produto_id: p.id, produto_avulso_id: null, nome: p.nome, rotulo: p.nome }));
-  const avl = (avulsoR.data || []).map(p => ({ produto_id: null, produto_avulso_id: p.id, nome: p.nome, rotulo: p.nome+' (Yeez — fora da Precificação)' }));
+  const fabIds = (fabR.data||[]).map(p => p.id);
+  const precoPorProdutoId = {};
+  if (fabIds.length){
+    const { data: precos } = await sb.from('precificacao_precos').select('produto_id, preco_venda, vigencia_inicio')
+      .in('produto_id', fabIds).eq('elo','fabrica_loja').eq('status','aprovado').lte('vigencia_inicio', new Date().toISOString().slice(0,10));
+    (precos||[]).forEach(p => {
+      const atual = precoPorProdutoId[p.produto_id];
+      if (!atual || p.vigencia_inicio > atual.vigencia_inicio) precoPorProdutoId[p.produto_id] = p;
+    });
+  }
+  const fab = (fabR.data || []).map(p => ({ produto_id: p.id, produto_avulso_id: null, nome: p.nome, rotulo: p.nome, preco_estimado: precoPorProdutoId[p.id] ? Number(precoPorProdutoId[p.id].preco_venda) : 0 }));
+  const avl = (avulsoR.data || []).map(p => ({ produto_id: null, produto_avulso_id: p.id, nome: p.nome, rotulo: p.nome+' (Yeez — fora da Precificação)', preco_estimado: Number(p.preco)||0 }));
   produtosCache = fab.concat(avl);
   return produtosCache;
 }
@@ -491,6 +648,8 @@ async function renderNovaVisita(){
       '</div>'+
       '<label class="check-line"><input type="checkbox" id="nvHigienizacao"> Higienização realizada</label>'+
       '<label class="check-line"><input type="checkbox" id="nvLimpeza"> Limpeza e arrumação (validades mais próximas na frente)</label>'+
+      '<label class="check-line" style="color:#B8860B"><input type="checkbox" id="nvFalhaLed"> ⚠️ Equipamento com falha no LED</label>'+
+      '<label class="check-line" style="color:#B43C3C"><input type="checkbox" id="nvRiscoFalha"> 🚨 Equipamento com risco de falha geral</label>'+
       '<div class="field" style="margin-bottom:14px"><label>Observações</label><textarea class="inp" id="nvObs" rows="2" placeholder="Ex: prateleira quebrada, cliente pediu sabor X..."></textarea></div>'+
 
       '<h2 style="font-size:1.05rem;margin-top:22px">Pedido tirado nesta visita</h2>'+
@@ -516,16 +675,26 @@ function renderItensVisita(){
     wrap.innerHTML = '<p class="hint">Nenhum item adicionado ainda.</p>';
     return;
   }
-  wrap.innerHTML = itensVisitaAtual.map((it, i) => (
-    '<div class="item-row">'+
+  wrap.innerHTML = itensVisitaAtual.map((it, i) => {
+    const catalogado = produtosCache.find(p => (p.produto_id && p.produto_id===it.produto_id) || (p.produto_avulso_id && p.produto_avulso_id===it.produto_avulso_id));
+    const precoEstimado = catalogado ? catalogado.preco_estimado : 0;
+    const valorLinha = precoEstimado * (Number(it.quantidade)||0);
+    return '<div class="item-row">'+
       '<div class="field"><label>Produto</label><input class="inp" type="text" list="produtosVisitaDatalist" autocomplete="off" value="'+esc(it.produto_nome||'')+'" placeholder="Digite pra buscar…" oninput="atualizarItemProduto('+i+',this.value)"></div>'+
-      '<div class="field qtd"><label>Qtd</label><input class="inp" type="number" min="0.01" step="0.01" value="'+it.quantidade+'" onchange="itensVisitaAtual['+i+'].quantidade=this.value"></div>'+
+      '<div class="field qtd"><label>Qtd</label><input class="inp" type="number" min="0.01" step="0.01" value="'+it.quantidade+'" onchange="itensVisitaAtual['+i+'].quantidade=this.value; renderItensVisita()"></div>'+
       '<div class="field un"><label>Unidade</label><select class="inp" onchange="itensVisitaAtual['+i+'].unidade=this.value">'+
         ['un','caixa'].map(u => '<option value="'+u+'" '+(it.unidade===u?'selected':'')+'>'+u+'</option>').join('')+
       '</select></div>'+
+      '<div class="field" style="max-width:110px"><label>Valor est.</label><div style="padding:9px 0;font-size:.85rem;font-weight:600;color:var(--bordo-dark)">'+fmtMoeda(valorLinha)+'</div></div>'+
       '<button class="btn-danger" onclick="removerItemVisita('+i+')">🗑️</button>'+
-    '</div>'
-  )).join('');
+    '</div>';
+  }).join('');
+
+  const totalPedido = itensVisitaAtual.reduce((soma, it) => {
+    const catalogado = produtosCache.find(p => (p.produto_id && p.produto_id===it.produto_id) || (p.produto_avulso_id && p.produto_avulso_id===it.produto_avulso_id));
+    return soma + (catalogado ? catalogado.preco_estimado : 0) * (Number(it.quantidade)||0);
+  }, 0);
+  wrap.innerHTML += '<p style="text-align:right;font-weight:600;margin-top:8px">Total estimado do pedido: '+fmtMoeda(totalPedido)+' <span style="font-weight:400;color:var(--text-light);font-size:.78rem">(o valor final considera a tabela de preço do cliente, se houver)</span></p>';
 }
 
 function atualizarItemProduto(i, texto){
@@ -563,6 +732,8 @@ async function salvarVisita(){
     p_data_visita: $('nvData').value,
     p_higienizacao: $('nvHigienizacao').checked,
     p_limpeza_arrumacao: $('nvLimpeza').checked,
+    p_falha_led: $('nvFalhaLed').checked,
+    p_risco_falha_geral: $('nvRiscoFalha').checked,
     p_observacoes: $('nvObs').value.trim() || null,
     p_itens: itensVisitaAtual.map(it => ({ produto_id: it.produto_id, produto_avulso_id: it.produto_avulso_id, produto_nome: it.produto_nome, quantidade: Number(it.quantidade), unidade: it.unidade })),
   };
@@ -633,10 +804,13 @@ async function carregarHistorico(){
           '<span class="flag-pill '+(v.higienizacao?'on':'')+'">'+(v.higienizacao?'✓':'—')+' Higienização</span>'+
           '<span class="flag-pill '+(v.limpeza_arrumacao?'on':'')+'">'+(v.limpeza_arrumacao?'✓':'—')+' Limpeza/arrumação</span>'+
           '<span class="flag-pill '+(v.pedido_tirado?'on':'')+'">'+(v.pedido_tirado?'✓':'—')+' Pedido tirado</span>'+
+          (v.falha_led ? '<span class="flag-pill" style="background:#FDF3E3;color:#B8860B">⚠️ Falha no LED</span>' : '')+
+          (v.risco_falha_geral ? '<span class="flag-pill" style="background:#FDEDEC;color:#B43C3C">🚨 Risco de falha geral</span>' : '')+
         '</div>'+
         (v.observacoes ? '<p style="font-size:.8rem;margin-top:8px">'+esc(v.observacoes)+'</p>' : '')+
-        (seusItens.length ? '<div class="table-wrap" style="margin-top:10px"><table><thead><tr><th>Produto</th><th>Qtd</th><th>Un.</th></tr></thead><tbody>'+
-          seusItens.map(it => '<tr><td>'+esc(it.produto_nome)+'</td><td>'+it.quantidade+'</td><td>'+esc(it.unidade)+'</td></tr>').join('')+
+        (seusItens.length ? '<div class="table-wrap" style="margin-top:10px"><table><thead><tr><th>Produto</th><th>Qtd</th><th>Un.</th><th>Valor unit.</th><th>Total</th></tr></thead><tbody>'+
+          seusItens.map(it => '<tr><td>'+esc(it.produto_nome)+'</td><td>'+it.quantidade+'</td><td>'+esc(it.unidade)+'</td><td>'+fmtMoeda(it.valor_unitario)+'</td><td>'+fmtMoeda(it.quantidade*it.valor_unitario)+'</td></tr>').join('')+
+          '<tr><td colspan="4" style="text-align:right;font-weight:600">Total da visita</td><td style="font-weight:600">'+fmtMoeda(seusItens.reduce((s,it)=>s+it.quantidade*it.valor_unitario,0))+'</td></tr>'+
         '</tbody></table></div>' : '')+
       '</div>'
     );
@@ -707,6 +881,80 @@ async function carregarRentabilidade(){
     '<div class="table-wrap"><table><thead><tr><th>Produto</th><th>Qtd. reposta</th><th>Un.</th><th>Preço unit. (fábrica→loja)</th><th>Valor estimado</th></tr></thead><tbody>'+
       data.map(r => '<tr><td>'+esc(r.produto_nome)+'</td><td>'+r.quantidade_total+'</td><td>'+esc(r.unidade)+'</td><td>'+(r.preco_venda_unit?fmtMoeda(r.preco_venda_unit):'—')+'</td><td>'+fmtMoeda(r.valor_estimado)+'</td></tr>').join('')+
     '</tbody></table></div>';
+}
+
+// ===================== PAINEL (GRÁFICOS) =====================
+let chartVisitasRef = null, chartVendasRef = null, chartRankingRef = null;
+
+async function renderPainel(){
+  $('mainContent').innerHTML = '<div class="loading">Carregando…</div>';
+  const hoje = new Date();
+  const inicio30 = new Date(hoje.getTime() - 30*86400000).toISOString().slice(0,10);
+  const fim = hoje.toISOString().slice(0,10);
+
+  const [serieR, rankingR, semVisitaR, riscoR] = await Promise.all([
+    sb.rpc('freezer_dashboard_serie_temporal', { p_data_inicio: inicio30, p_data_fim: fim }),
+    sb.rpc('freezer_dashboard_ranking_produtos', { p_data_inicio: inicio30, p_data_fim: fim }),
+    sb.rpc('freezer_dashboard_sem_visita'),
+    sb.rpc('freezer_dashboard_risco_falha'),
+  ]);
+
+  if (serieR.error){ $('mainContent').innerHTML = '<div class="card"><div class="empty">Erro: '+esc(serieR.error.message)+'</div></div>'; return; }
+
+  const serie = serieR.data || [];
+  const ranking = (rankingR.data || []).slice(0, 10);
+  const semVisita = (semVisitaR.data || []).slice(0, 10);
+  const risco = riscoR.data || [];
+
+  const totalVisitas30d = serie.reduce((s,d) => s + Number(d.qtd_visitas||0), 0);
+  const totalVendas30d = serie.reduce((s,d) => s + Number(d.valor_pedidos||0), 0);
+
+  $('mainContent').innerHTML =
+    '<div class="stat-box">'+
+      '<div class="stat"><div class="num">'+totalVisitas30d+'</div><div class="lbl">Visitas nos últimos 30 dias</div></div>'+
+      '<div class="stat"><div class="num">'+fmtMoeda(totalVendas30d)+'</div><div class="lbl">Valor pedido nos últimos 30 dias</div></div>'+
+      '<div class="stat"><div class="num" style="color:'+(risco.length?'#B43C3C':'#2E7D32')+'">'+risco.length+'</div><div class="lbl">Freezers com risco de falha</div></div>'+
+    '</div>'+
+    '<div class="card"><h2>Visitas por dia (últimos 30 dias)</h2><canvas id="chartVisitas" height="90"></canvas></div>'+
+    '<div class="card"><h2>Valor de pedidos por dia (últimos 30 dias)</h2><canvas id="chartVendas" height="90"></canvas></div>'+
+    '<div class="card"><h2>Ranking — produtos mais pedidos (30 dias)</h2>'+
+      (ranking.length ? '<canvas id="chartRanking" height="'+Math.max(120, ranking.length*32)+'"></canvas>' : '<div class="empty">Nenhum pedido registrado no período.</div>')+
+    '</div>'+
+    '<div class="card"><h2>Freezers há mais tempo sem visita</h2><div class="table-wrap"><table><thead><tr><th>Freezer</th><th>Rede</th><th>Última visita</th><th>Dias sem visita</th></tr></thead><tbody>'+
+      (semVisita.length ? semVisita.map(f => '<tr><td>'+esc(f.ponto_venda)+'</td><td>'+esc(f.rede||'—')+'</td><td>'+(f.ultima_visita?fmtData(f.ultima_visita):'Nunca visitado')+'</td><td style="font-weight:600;color:'+(f.dias_sem_visita>30?'#B43C3C':f.dias_sem_visita>14?'#B8860B':'#2E7D32')+'">'+f.dias_sem_visita+'</td></tr>').join('') : '<tr><td colspan="4">Nenhum freezer ativo.</td></tr>')+
+    '</tbody></table></div></div>'+
+    '<div class="card"><h2>Freezers com risco de falha</h2><div class="table-wrap"><table><thead><tr><th>Freezer</th><th>Rede</th><th>Última visita</th><th>Sinalização</th></tr></thead><tbody>'+
+      (risco.length ? risco.map(f => '<tr><td>'+esc(f.ponto_venda)+'</td><td>'+esc(f.rede||'—')+'</td><td>'+fmtData(f.data_visita)+'</td><td>'+(f.risco_falha_geral?'<span class="flag-pill" style="background:#FDEDEC;color:#B43C3C">🚨 Risco geral</span> ':'')+(f.falha_led?'<span class="flag-pill" style="background:#FDF3E3;color:#B8860B">⚠️ LED</span>':'')+'</td></tr>').join('') : '<tr><td colspan="4">Nenhum freezer com risco sinalizado. 🎉</td></tr>')+
+    '</tbody></table></div></div>';
+
+  desenharGraficosPainel(serie, ranking);
+}
+
+function desenharGraficosPainel(serie, ranking){
+  const ctxVisitas = document.getElementById('chartVisitas');
+  if (chartVisitasRef) chartVisitasRef.destroy();
+  chartVisitasRef = new Chart(ctxVisitas, {
+    type: 'line',
+    data: { labels: serie.map(d => fmtData(d.dia)), datasets: [{ label:'Visitas', data: serie.map(d=>d.qtd_visitas), borderColor:'#6B1E2E', backgroundColor:'rgba(107,30,46,.1)', fill:true, tension:.3 }] },
+    options: { plugins:{legend:{display:false}}, scales:{ y:{ beginAtZero:true, ticks:{precision:0} } } },
+  });
+
+  const ctxVendas = document.getElementById('chartVendas');
+  if (chartVendasRef) chartVendasRef.destroy();
+  chartVendasRef = new Chart(ctxVendas, {
+    type: 'line',
+    data: { labels: serie.map(d => fmtData(d.dia)), datasets: [{ label:'Valor (R$)', data: serie.map(d=>Number(d.valor_pedidos)), borderColor:'#A0785A', backgroundColor:'rgba(160,120,90,.12)', fill:true, tension:.3 }] },
+    options: { plugins:{legend:{display:false}, tooltip:{ callbacks:{ label: (ctx)=>fmtMoeda(ctx.parsed.y) } } }, scales:{ y:{ beginAtZero:true, ticks:{ callback:(v)=>fmtMoeda(v) } } } },
+  });
+
+  if (!ranking.length) return;
+  const ctxRanking = document.getElementById('chartRanking');
+  if (chartRankingRef) chartRankingRef.destroy();
+  chartRankingRef = new Chart(ctxRanking, {
+    type: 'bar',
+    data: { labels: ranking.map(r=>r.produto_nome), datasets: [{ label:'Quantidade pedida', data: ranking.map(r=>Number(r.quantidade_total)), backgroundColor:'#6B1E2E', borderRadius:5 }] },
+    options: { indexAxis:'y', plugins:{legend:{display:false}}, scales:{ x:{ beginAtZero:true } } },
+  });
 }
 
 verificarAcessoEIniciar();
