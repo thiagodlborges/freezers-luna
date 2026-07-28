@@ -534,7 +534,8 @@ async function popularSelectTabelasPreco(selecionadoId){
 }
 
 async function popularSelectRepositores(selecionadoId){
-  const { data } = await sb.from('perfis').select('id,nome').eq('freezers_repositor', true).order('nome');
+  const { data, error } = await sb.rpc('freezers_listar_repositores');
+  if (error) console.error('Erro ao listar repositores:', error.message);
   const opts = (data||[]).map(p => '<option value="'+p.id+'" '+(p.id===selecionadoId?'selected':'')+'>'+esc(p.nome)+'</option>').join('');
   $('mfRepositor').innerHTML = '<option value="">— sem repositor definido —</option>' + opts;
 }
