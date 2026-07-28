@@ -279,9 +279,11 @@ async function verificarAcessoEIniciar(){
   if (!souBackoffice) {
     // Repositor puro: sem tela de cadastro de freezer, só a própria operação.
     $('tabFreezers').textContent = '🧊 Meus Freezers';
-    $('tabPainel').style.display = 'none';
     $('tabPrecificacaoFreezers').style.display = 'none';
-    $('tabVendasDia').style.display = 'none';
+    if (!souRepositor) {
+      $('tabPainel').style.display = 'none';
+      $('tabVendasDia').style.display = 'none';
+    }
   }
 
   $('carregandoOverlay').style.display = 'none';
@@ -921,6 +923,7 @@ async function renderPainel(){
   const totalVendas30d = serie.reduce((s,d) => s + Number(d.valor_pedidos||0), 0);
 
   $('mainContent').innerHTML =
+    (!souBackoffice ? '<p class="hint" style="margin-bottom:14px">Mostrando só os números da sua carteira de freezers.</p>' : '')+
     '<div class="stat-box">'+
       '<div class="stat"><div class="num">'+totalVisitas30d+'</div><div class="lbl">Visitas nos últimos 30 dias</div></div>'+
       '<div class="stat"><div class="num">'+fmtMoeda(totalVendas30d)+'</div><div class="lbl">Valor pedido nos últimos 30 dias</div></div>'+
@@ -980,7 +983,7 @@ async function renderVendasDia(){
           '<button class="btn-outline btn btn-sm" onclick="window.print()">🖨️ Imprimir</button>'+
         '</div>'+
       '</div>'+
-      '<p class="hint">Pedidos tirados nas visitas do dia, agrupados por cliente — separado com o que precisa pra lançar a nota fiscal (razão social, endereço, itens e valores).</p>'+
+      '<p class="hint">Pedidos tirados nas visitas do dia, agrupados por cliente — separado com o que precisa pra lançar a nota fiscal (razão social, endereço, itens e valores).'+(!souBackoffice ? ' Mostrando só os clientes da sua carteira.' : '')+'</p>'+
       '<div id="vdConteudo" style="margin-top:14px"><div class="loading">Carregando…</div></div>'+
     '</div>';
   await carregarVendasDia();
