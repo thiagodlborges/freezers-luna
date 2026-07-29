@@ -132,6 +132,7 @@
   <div class="tab" id="tabRentabilidade" data-tab="rentabilidade" onclick="mudarTab('rentabilidade')">📊 Reposição</div>
   <div class="tab" id="tabPainel" data-tab="painel" onclick="mudarTab('painel')">📈 Painel</div>
   <div class="tab" id="tabVendasDia" data-tab="vendasdia" onclick="mudarTab('vendasdia')">🧾 Vendas do Dia</div>
+  <div class="tab" id="tabRotas" data-tab="rotas" onclick="mudarTab('rotas')">🗺️ Rotas</div>
 </nav>
 
 <main id="mainContent"><div class="loading">Carregando…</div></main>
@@ -301,6 +302,7 @@ async function mudarTab(tab){
   else if (tab === 'rentabilidade') await renderRentabilidade();
   else if (tab === 'painel') await renderPainel();
   else if (tab === 'vendasdia') await renderVendasDia();
+  else if (tab === 'rotas') await renderRotas();
 }
 
 // ===================== FREEZERS =====================
@@ -1019,6 +1021,114 @@ async function carregarVendasDia(){
   $('vdConteudo').innerHTML =
     '<div class="stat-box"><div class="stat"><div class="num">'+fmtMoeda(totalGeral)+'</div><div class="lbl">Total geral do dia ('+Object.keys(porFreezer).length+' cliente(s))</div></div></div>'+
     blocos;
+}
+
+// ===================== ROTAS (ROTEIRIZAÇÃO) =====================
+function distanciaKm(a, b){
+  const R = 6371;
+  const dLat = (b.latitude - a.latitude) * Math.PI/180;
+  const dLng = (b.longitude - a.longitude) * Math.PI/180;
+  const lat1 = a.latitude * Math.PI/180, lat2 = b.latitude * Math.PI/180;
+  const h = Math.sin(dLat/2)**2 + Math.cos(lat1)*Math.cos(lat2)*Math.sin(dLng/2)**2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+function clusterizarFreezers(pontos, tamanhoAlvo){
+  const restantes = pontos.slice();
+  const clusters = [];
+  while (restantes.length){
+    restantes.sort((a,b) => (b.latitude - a.latitude) || (a.longitude - b.longitude));
+    const semente = restantes.shift();
+    restantes.sort((a,b) => distanciaKm(semente,a) - distanciaKm(semente,b));
+    const qtd = Math.min(tamanhoAlvo - 1, restantes.length);
+    const cluster = [semente, ...restantes.splice(0, qtd)];
+    clusters.push(cluster);
+  }
+  return clusters;
+}
+
+function ordenarRotaMaisProximo(pontos){
+  const restantes = pontos.slice();
+  const rota = [restantes.shift()];
+  while (restantes.length){
+    const atual = rota[rota.length-1];
+    restantes.sort((a,b) => distanciaKm(atual,a) - distanciaKm(atual,b));
+    rota.push(restantes.shift());
+  }
+  return rota;
+}
+
+function distanciaTotalRota(pontos){
+  let total = 0;
+  for (let i=1; i<pontos.length; i++) total += distanciaKm(pontos[i-1], pontos[i]);
+  return total;
+}
+
+function linkGoogleMaps(pontos){
+  const coords = pontos.map(p => p.latitude+','+p.longitude);
+  const destino = coords[coords.length-1];
+  const waypoints = coords.slice(0, -1).join('|');
+  return 'https://www.google.com/maps/dir/?api=1&destination='+destino+(waypoints?'&waypoints='+encodeURIComponent(waypoints):'')+'&travelmode=driving';
+}
+
+async function renderRotas(){
+  $('mainContent').innerHTML = '<div class="loading">Carregando…</div>';
+
+  let selectorRepositor = '';
+  if (souBackoffice){
+    const { data: repositores } = await sb.rpc('freezers_listar_repositores');
+    selectorRepositor = '<div class="field" style="flex:1"><label>Repositor</label><select class="inp" id="rtRepositor" onchange="carregarRotas()">'+
+      '<option value="">— selecione —</option>'+
+      (repositores||[]).map(r => '<option value="'+r.id+'">'+esc(r.nome)+'</option>').join('')+
+    '</select></div>';
+  }
+
+  $('mainContent').innerHTML =
+    '<div class="card">'+
+      '<h2>Sugestão de Rotas</h2>'+
+      '<p class="hint">Agrupa os freezers ativos da carteira por proximidade e sugere uma ordem de visita em cada grupo. É uma sugestão — ajuste com o conhecimento de quem roda a região.</p>'+
+      '<div class="row" style="margin-top:10px">'+
+        selectorRepositor+
+        '<div class="field" style="max-width:160px"><label>Paradas por rota</label><input class="inp" type="number" min="3" max="15" value="7" id="rtTamanho" onchange="carregarRotas()"></div>'+
+      '</div>'+
+      '<div id="rtConteudo" style="margin-top:14px">'+(souBackoffice?'<div class="empty">Escolha um repositor.</div>':'<div class="loading">Carregando…</div>')+'</div>'+
+    '</div>';
+
+  if (!souBackoffice) await carregarRotas();
+}
+
+async function carregarRotas(){
+  const el = $('rtConteudo');
+  const tamanhoAlvo = Number($('rtTamanho').value) || 7;
+
+  let query = sb.from('freezers').select('id, ponto_venda, rede, endereco, cidade, latitude, longitude, repositor_id').eq('status','ativo').not('latitude','is',null);
+  const { data: todos, error } = await query;
+  if (error){ el.innerHTML = '<div class="empty">Erro: '+esc(error.message)+'</div>'; return; }
+
+  let pontos = todos || [];
+  if (souBackoffice){
+    const repositorId = $('rtRepositor') ? $('rtRepositor').value : '';
+    if (!repositorId){ el.innerHTML = '<div class="empty">Escolha um repositor.</div>'; return; }
+    pontos = pontos.filter(f => f.repositor_id === repositorId);
+  }
+
+  if (!pontos.length){ el.innerHTML = '<div class="empty">Nenhum freezer geocodificado nessa carteira ainda.</div>'; return; }
+
+  const clusters = clusterizarFreezers(pontos, tamanhoAlvo).map(c => ordenarRotaMaisProximo(c));
+
+  el.innerHTML = '<p class="hint" style="margin-bottom:14px">'+pontos.length+' freezer(s) geocodificado(s), agrupados em '+clusters.length+' rota(s).</p>'+
+    clusters.map((rota, i) => {
+      const km = distanciaTotalRota(rota);
+      return '<div class="card" style="background:var(--creme)">'+
+        '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">'+
+          '<div class="fnome">Rota '+(i+1)+' — '+rota.length+' parada(s) · ~'+km.toFixed(0)+' km entre paradas</div>'+
+          '<a class="btn btn-sm" href="'+linkGoogleMaps(rota)+'" target="_blank">📍 Abrir no Google Maps</a>'+
+        '</div>'+
+        '<ol style="margin:10px 0 0 20px;padding:0;font-size:.85rem">'+
+          rota.map(p => '<li style="margin-bottom:6px"><b>'+esc(p.ponto_venda)+'</b>'+(p.rede?' — '+esc(p.rede):'')+'<br><span style="color:var(--text-light)">'+esc(p.endereco||'—')+'</span></li>').join('')+
+        '</ol>'+
+      '</div>';
+    }).join('');
 }
 
 verificarAcessoEIniciar();
