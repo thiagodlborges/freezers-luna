@@ -998,13 +998,24 @@ async function carregarRentabilidade(){
 }
 
 // ===================== PAINEL (GRÁFICOS) =====================
-let chartVisitasRef = null, chartVendasRef = null, chartRankingRef = null;
+let chartVisitasRef = null, chartVendasRef = null, chartRankingRef = null, chartMetaRef = null;
+let painelRepositorMeta = null;
+let painelMesAtual = null, painelFimAtual = null;
+
+const MES_NOMES = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+function mesLabelPtBr(dataYYYYMM01){
+  const [ano, mes] = dataYYYYMM01.split('-');
+  return MES_NOMES[Number(mes)-1]+'/'+ano;
+}
 
 async function renderPainel(){
   $('mainContent').innerHTML = '<div class="loading">Carregando…</div>';
   const hoje = new Date();
   const inicio30 = new Date(hoje.getTime() - 30*86400000).toISOString().slice(0,10);
   const fim = hoje.toISOString().slice(0,10);
+  const primeiroDiaMes = fim.slice(0,7)+'-01';
+  painelMesAtual = primeiroDiaMes;
+  painelFimAtual = fim;
 
   const [serieR, rankingR, semVisitaR, riscoR] = await Promise.all([
     sb.rpc('freezer_dashboard_serie_temporal', { p_data_inicio: inicio30, p_data_fim: fim }),
@@ -1022,18 +1033,39 @@ async function renderPainel(){
 
   const totalVisitas30d = serie.reduce((s,d) => s + Number(d.qtd_visitas||0), 0);
   const totalVendas30d = serie.reduce((s,d) => s + Number(d.valor_pedidos||0), 0);
+  const data7diasAtras = new Date(hoje.getTime() - 6*86400000).toISOString().slice(0,10); // hoje + 6 dias anteriores = últimos 7 dias
+  const totalVisitas7d = serie.filter(d => d.dia >= data7diasAtras).reduce((s,d) => s + Number(d.qtd_visitas||0), 0);
+
+  let seletorRepositorMeta = '';
+  if (souBackoffice){
+    if (!rtRepositoresCache){ const { data } = await sb.rpc('freezers_listar_repositores'); rtRepositoresCache = data || []; }
+    seletorRepositorMeta = '<select class="inp" id="painelMetaRepositor" style="max-width:220px" onchange="painelRepositorMeta=this.value;carregarMetaPainel()">'+
+      '<option value="">— escolha um repositor —</option>'+
+      rtRepositoresCache.map(r => '<option value="'+r.id+'"'+(painelRepositorMeta===r.id?' selected':'')+'>'+esc(r.nome)+'</option>').join('')+
+    '</select>';
+  }
 
   $('mainContent').innerHTML =
     (!souBackoffice ? '<p class="hint" style="margin-bottom:14px">Mostrando só os números da sua carteira de freezers.</p>' : '')+
     '<div class="stat-box">'+
+      '<div class="stat"><div class="num">'+totalVisitas7d+'</div><div class="lbl">Visitas nos últimos 7 dias</div></div>'+
       '<div class="stat"><div class="num">'+totalVisitas30d+'</div><div class="lbl">Visitas nos últimos 30 dias</div></div>'+
       '<div class="stat"><div class="num">'+fmtMoeda(totalVendas30d)+'</div><div class="lbl">Valor pedido nos últimos 30 dias</div></div>'+
       '<div class="stat"><div class="num" style="color:'+(risco.length?'#B43C3C':'#2E7D32')+'">'+risco.length+'</div><div class="lbl">Freezers com risco de falha</div></div>'+
     '</div>'+
-    '<div class="card"><h2>Visitas por dia (últimos 30 dias)</h2><canvas id="chartVisitas" height="90"></canvas></div>'+
-    '<div class="card"><h2>Valor de pedidos por dia (últimos 30 dias)</h2><canvas id="chartVendas" height="90"></canvas></div>'+
-    '<div class="card"><h2>Ranking — produtos mais pedidos (30 dias)</h2>'+
-      (ranking.length ? '<canvas id="chartRanking" height="'+Math.max(120, ranking.length*32)+'"></canvas>' : '<div class="empty">Nenhum pedido registrado no período.</div>')+
+    '<div class="card">'+
+      '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">'+
+        '<h2 style="margin:0;font-size:.95rem">🎯 Meta do Mês — '+mesLabelPtBr(primeiroDiaMes)+'</h2>'+
+        seletorRepositorMeta+
+      '</div>'+
+      '<div id="painelMetaConteudo" style="margin-top:12px"><div class="loading">Carregando…</div></div>'+
+    '</div>'+
+    '<div class="row" style="gap:16px;align-items:stretch">'+
+      '<div class="card" style="flex:1;min-width:260px"><h2 style="font-size:.95rem">Visitas por dia (30 dias)</h2><div style="height:140px"><canvas id="chartVisitas"></canvas></div></div>'+
+      '<div class="card" style="flex:1;min-width:260px"><h2 style="font-size:.95rem">Valor de pedidos por dia (30 dias)</h2><div style="height:140px"><canvas id="chartVendas"></canvas></div></div>'+
+    '</div>'+
+    '<div class="card"><h2 style="font-size:.95rem">Ranking — produtos mais pedidos (30 dias)</h2>'+
+      (ranking.length ? '<div style="height:'+Math.max(90, ranking.length*22)+'px"><canvas id="chartRanking"></canvas></div>' : '<div class="empty">Nenhum pedido registrado no período.</div>')+
     '</div>'+
     '<div class="card"><h2>Freezers há mais tempo sem visita</h2><div class="table-wrap"><table><thead><tr><th>Freezer</th><th>Rede</th><th>Última visita</th><th>Dias sem visita</th></tr></thead><tbody>'+
       (semVisita.length ? semVisita.map(f => '<tr><td>'+esc(f.ponto_venda)+'</td><td>'+esc(f.rede||'—')+'</td><td>'+(f.ultima_visita?fmtData(f.ultima_visita):'Nunca visitado')+'</td><td style="font-weight:600;color:'+(f.dias_sem_visita>30?'#B43C3C':f.dias_sem_visita>14?'#B8860B':'#2E7D32')+'">'+f.dias_sem_visita+'</td></tr>').join('') : '<tr><td colspan="4">Nenhum freezer ativo.</td></tr>')+
@@ -1043,6 +1075,87 @@ async function renderPainel(){
     '</tbody></table></div></div>';
 
   desenharGraficosPainel(serie, ranking);
+  await carregarMetaPainel();
+}
+
+async function carregarMetaPainel(){
+  const el = $('painelMetaConteudo');
+  const repositorId = souBackoffice ? painelRepositorMeta : meuPerfil.id;
+
+  if (souBackoffice && !repositorId){
+    el.innerHTML = '<div class="empty">Escolha um repositor pra ver e definir a meta dele.</div>';
+    return;
+  }
+
+  el.innerHTML = '<div class="loading">Carregando…</div>';
+
+  const [{ data: metaRow }, valorR] = await Promise.all([
+    sb.from('freezer_metas').select('*').eq('repositor_id', repositorId).eq('mes', painelMesAtual).maybeSingle(),
+    souBackoffice
+      ? sb.rpc('freezer_valor_pedidos_periodo', { p_data_inicio: painelMesAtual, p_data_fim: painelFimAtual, p_repositor_id: repositorId })
+      : sb.rpc('freezer_valor_pedidos_periodo', { p_data_inicio: painelMesAtual, p_data_fim: painelFimAtual }),
+  ]);
+
+  const valorMeta = metaRow ? Number(metaRow.valor_meta) : 0;
+  const valorRealizado = Number(valorR.data) || 0;
+  const pct = valorMeta > 0 ? (valorRealizado / valorMeta * 100) : 0;
+
+  el.innerHTML =
+    (souBackoffice ? '<div class="row" style="gap:8px;margin-bottom:14px;align-items:flex-end">'+
+      '<div class="field" style="max-width:200px"><label>Meta (R$)</label><input class="inp" type="number" min="0" step="0.01" id="painelMetaValor" value="'+valorMeta+'"></div>'+
+      '<button class="btn-outline btn btn-sm" onclick="salvarMetaPainel()">Salvar</button>'+
+    '</div>' : '')+
+    '<div class="row" style="align-items:center;gap:20px">'+
+      '<div style="width:100px;height:100px;flex-shrink:0"><canvas id="chartMeta"></canvas></div>'+
+      '<div>'+
+        '<div style="font-family:\'Cormorant Garamond\',serif;font-size:1.7rem;color:var(--bordo-dark);font-weight:600;line-height:1">'+fmtMoeda(valorRealizado)+'</div>'+
+        '<div class="hint" style="margin-top:4px">'+(valorMeta>0 ? 'de '+fmtMoeda(valorMeta)+' — '+pct.toFixed(0)+'% atingido' : (souBackoffice ? 'Meta ainda não definida pra esse repositor este mês.' : 'Meta ainda não definida pra este mês.'))+'</div>'+
+      '</div>'+
+    '</div>';
+
+  desenharChartMeta(valorRealizado, valorMeta);
+}
+
+async function salvarMetaPainel(){
+  if (!painelRepositorMeta) return;
+  const valor = Number($('painelMetaValor').value);
+  if (isNaN(valor) || valor < 0){ alert('Informe um valor de meta válido.'); return; }
+
+  const { error } = await sb.from('freezer_metas').upsert({
+    repositor_id: painelRepositorMeta, mes: painelMesAtual, valor_meta: valor,
+    criado_por: meuPerfil.id, criado_por_nome: meuPerfil.nome,
+  }, { onConflict: 'repositor_id,mes' });
+  if (error){ alert('Erro ao salvar meta: '+error.message); return; }
+
+  await carregarMetaPainel();
+}
+
+function desenharChartMeta(realizado, meta){
+  const ctx = document.getElementById('chartMeta');
+  if (!ctx) return;
+  if (chartMetaRef) chartMetaRef.destroy();
+  const pct = meta > 0 ? Math.min(100, (realizado/meta)*100) : 0;
+  const cor = pct >= 100 ? '#2E7D32' : pct >= 60 ? '#6B1E2E' : '#B8860B';
+  const pctLabel = meta > 0 ? Math.round((realizado/meta)*100) : 0;
+
+  chartMetaRef = new Chart(ctx, {
+    type: 'doughnut',
+    data: { labels: ['Atingido','Restante'], datasets: [{ data: meta>0 ? [pct, 100-pct] : [0,100], backgroundColor: [cor, '#EDE4D4'], borderWidth:0 }] },
+    options: { responsive:true, maintainAspectRatio:false, cutout:'72%', plugins:{ legend:{display:false}, tooltip:{enabled:false} } },
+    plugins: [{
+      id: 'metaCenterText',
+      afterDraw(chart){
+        const { ctx, chartArea:{ width, height, left, top } } = chart;
+        ctx.save();
+        ctx.font = "700 15px 'Jost', sans-serif";
+        ctx.fillStyle = '#4A1220';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(pctLabel+'%', left+width/2, top+height/2);
+        ctx.restore();
+      }
+    }]
+  });
 }
 
 function desenharGraficosPainel(serie, ranking){
@@ -1050,16 +1163,16 @@ function desenharGraficosPainel(serie, ranking){
   if (chartVisitasRef) chartVisitasRef.destroy();
   chartVisitasRef = new Chart(ctxVisitas, {
     type: 'line',
-    data: { labels: serie.map(d => fmtData(d.dia)), datasets: [{ label:'Visitas', data: serie.map(d=>d.qtd_visitas), borderColor:'#6B1E2E', backgroundColor:'rgba(107,30,46,.1)', fill:true, tension:.3 }] },
-    options: { plugins:{legend:{display:false}}, scales:{ y:{ beginAtZero:true, ticks:{precision:0} } } },
+    data: { labels: serie.map(d => fmtData(d.dia)), datasets: [{ label:'Visitas', data: serie.map(d=>d.qtd_visitas), borderColor:'#6B1E2E', backgroundColor:'rgba(107,30,46,.1)', fill:true, tension:.3, pointRadius:2 }] },
+    options: { responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{ y:{ beginAtZero:true, ticks:{precision:0} } } },
   });
 
   const ctxVendas = document.getElementById('chartVendas');
   if (chartVendasRef) chartVendasRef.destroy();
   chartVendasRef = new Chart(ctxVendas, {
     type: 'line',
-    data: { labels: serie.map(d => fmtData(d.dia)), datasets: [{ label:'Valor (R$)', data: serie.map(d=>Number(d.valor_pedidos)), borderColor:'#A0785A', backgroundColor:'rgba(160,120,90,.12)', fill:true, tension:.3 }] },
-    options: { plugins:{legend:{display:false}, tooltip:{ callbacks:{ label: (ctx)=>fmtMoeda(ctx.parsed.y) } } }, scales:{ y:{ beginAtZero:true, ticks:{ callback:(v)=>fmtMoeda(v) } } } },
+    data: { labels: serie.map(d => fmtData(d.dia)), datasets: [{ label:'Valor (R$)', data: serie.map(d=>Number(d.valor_pedidos)), borderColor:'#A0785A', backgroundColor:'rgba(160,120,90,.12)', fill:true, tension:.3, pointRadius:2 }] },
+    options: { responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}, tooltip:{ callbacks:{ label: (ctx)=>fmtMoeda(ctx.parsed.y) } } }, scales:{ y:{ beginAtZero:true, ticks:{ callback:(v)=>fmtMoeda(v) } } } },
   });
 
   if (!ranking.length) return;
@@ -1068,7 +1181,7 @@ function desenharGraficosPainel(serie, ranking){
   chartRankingRef = new Chart(ctxRanking, {
     type: 'bar',
     data: { labels: ranking.map(r=>r.produto_nome), datasets: [{ label:'Quantidade pedida', data: ranking.map(r=>Number(r.quantidade_total)), backgroundColor:'#6B1E2E', borderRadius:5 }] },
-    options: { indexAxis:'y', plugins:{legend:{display:false}}, scales:{ x:{ beginAtZero:true } } },
+    options: { indexAxis:'y', responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{ x:{ beginAtZero:true } } },
   });
 }
 
