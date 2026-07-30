@@ -1055,8 +1055,11 @@ async function renderPainel(){
     '</div>'+
     '<div class="card">'+
       '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">'+
-        '<h2 style="margin:0;font-size:.95rem">🎯 Meta do Mês — '+mesLabelPtBr(primeiroDiaMes)+'</h2>'+
-        seletorRepositorMeta+
+        '<h2 style="margin:0;font-size:.95rem">🎯 Meta do Mês</h2>'+
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">'+
+          '<input class="inp" type="month" id="painelMetaMesInput" value="'+primeiroDiaMes.slice(0,7)+'" style="max-width:150px" onchange="painelMudarMes()">'+
+          seletorRepositorMeta+
+        '</div>'+
       '</div>'+
       '<div id="painelMetaConteudo" style="margin-top:12px"><div class="loading">Carregando…</div></div>'+
     '</div>'+
@@ -1101,6 +1104,7 @@ async function carregarMetaPainel(){
   const pct = valorMeta > 0 ? (valorRealizado / valorMeta * 100) : 0;
 
   el.innerHTML =
+    '<p class="hint" style="margin-bottom:10px">'+mesLabelPtBr(painelMesAtual)+'</p>'+
     (souBackoffice ? '<div class="row" style="gap:8px;margin-bottom:14px;align-items:flex-end">'+
       '<div class="field" style="max-width:200px"><label>Meta (R$)</label><input class="inp" type="number" min="0" step="0.01" id="painelMetaValor" value="'+valorMeta+'"></div>'+
       '<button class="btn-outline btn btn-sm" onclick="salvarMetaPainel()">Salvar</button>'+
@@ -1109,11 +1113,22 @@ async function carregarMetaPainel(){
       '<div style="width:100px;height:100px;flex-shrink:0"><canvas id="chartMeta"></canvas></div>'+
       '<div>'+
         '<div style="font-family:\'Cormorant Garamond\',serif;font-size:1.7rem;color:var(--bordo-dark);font-weight:600;line-height:1">'+fmtMoeda(valorRealizado)+'</div>'+
-        '<div class="hint" style="margin-top:4px">'+(valorMeta>0 ? 'de '+fmtMoeda(valorMeta)+' — '+pct.toFixed(0)+'% atingido' : (souBackoffice ? 'Meta ainda não definida pra esse repositor este mês.' : 'Meta ainda não definida pra este mês.'))+'</div>'+
+        '<div class="hint" style="margin-top:4px">'+(valorMeta>0 ? 'de '+fmtMoeda(valorMeta)+' — '+pct.toFixed(0)+'% atingido' : (souBackoffice ? 'Meta ainda não definida pra esse repositor nesse mês.' : 'Meta ainda não definida pra esse mês.'))+'</div>'+
       '</div>'+
     '</div>';
 
   desenharChartMeta(valorRealizado, valorMeta);
+}
+
+function painelMudarMes(){
+  const valor = $('painelMetaMesInput').value; // 'YYYY-MM'
+  if (!valor) return;
+  const [ano, mes] = valor.split('-').map(Number);
+  painelMesAtual = valor+'-01';
+  const hoje = new Date();
+  const ehMesAtual = (hoje.getFullYear()===ano && (hoje.getMonth()+1)===mes);
+  painelFimAtual = ehMesAtual ? hoje.toISOString().slice(0,10) : new Date(ano, mes, 0).toISOString().slice(0,10); // hoje, se for o mês corrente, senão o último dia do mês escolhido
+  carregarMetaPainel();
 }
 
 async function salvarMetaPainel(){
