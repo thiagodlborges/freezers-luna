@@ -74,6 +74,13 @@
   .item-row .field{flex:1;min-width:140px}
   .item-row .qtd{max-width:100px}
   .item-row .un{max-width:90px}
+  .autocomplete-wrap{position:relative}
+  .autocomplete-list{position:absolute;top:100%;left:0;right:0;margin-top:2px;background:var(--white);border:1px solid var(--marrom-light);border-radius:8px;max-height:220px;overflow-y:auto;z-index:50;box-shadow:0 6px 16px rgba(44,24,16,.18)}
+  .autocomplete-item{padding:9px 12px;cursor:pointer;font-size:.88rem;border-bottom:1px solid var(--creme-dark)}
+  .autocomplete-item:last-child{border-bottom:none}
+  .autocomplete-item:hover{background:var(--creme-dark)}
+  .autocomplete-empty{color:var(--text-light);cursor:default}
+  .autocomplete-empty:hover{background:none}
 
   .foto-thumb{width:88px;height:88px;object-fit:cover;border-radius:8px;border:1px solid var(--creme-dark);cursor:pointer}
   .foto-grid{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
@@ -197,6 +204,7 @@
       <div class="field" style="flex:1"><label>Preço (R$)</label><input class="inp" type="number" min="0" step="0.01" id="mpsPreco" value="0"></div>
       <div class="field" style="flex:1"><label>Marca</label><input class="inp" id="mpsMarca" value="Yeez"></div>
     </div>
+    <div class="field" style="max-width:200px;margin-bottom:10px"><label>Un. por caixa (opcional)</label><input class="inp" type="number" min="1" step="1" id="mpsUnidadesPorCaixa" placeholder="Ex: 20"></div>
     <div class="modal-actions">
       <button class="btn" onclick="salvarProdutoSimples()">Salvar</button>
       <button class="btn-outline btn" onclick="fecharModal('modalProdutoSimples')">Cancelar</button>
@@ -378,13 +386,14 @@ async function renderProdutosSimples(){
   if (error){ el.innerHTML = '<div class="empty">Erro: '+esc(error.message)+'</div>'; return; }
   if (!data || !data.length){ el.innerHTML = '<div class="empty">Nenhum produto simples cadastrado ainda.</div>'; return; }
 
-  el.innerHTML = '<div class="table-wrap"><table><thead><tr><th>Produto</th><th>Categoria</th><th>Código</th><th>Preço (R$)</th><th>Ativo</th><th></th></tr></thead><tbody>'+
+  el.innerHTML = '<div class="table-wrap"><table><thead><tr><th>Produto</th><th>Categoria</th><th>Código</th><th>Preço (R$)</th><th>Un/Caixa</th><th>Ativo</th><th></th></tr></thead><tbody>'+
     data.map(p => (
       '<tr'+(p.ativo?'':' class="inativo"')+'>'+
         '<td>'+esc(p.nome)+'</td>'+
         '<td>'+esc(p.categoria)+'</td>'+
         '<td>'+esc(p.codigo||'—')+'</td>'+
         '<td><input class="inp" type="number" min="0" step="0.01" value="'+Number(p.preco||0).toFixed(2)+'" style="max-width:110px" onchange="salvarPrecoSimples(\''+p.id+'\',this.value)"></td>'+
+        '<td><input class="inp" type="number" min="1" step="1" value="'+(p.unidades_por_caixa!=null?p.unidades_por_caixa:'')+'" placeholder="—" style="max-width:80px" onchange="salvarUnidadesPorCaixaSimples(\''+p.id+'\',this.value)"></td>'+
         '<td><input type="checkbox" '+(p.ativo?'checked':'')+' onchange="salvarAtivoSimples(\''+p.id+'\',this.checked)"></td>'+
         '<td><button class="btn-danger" onclick="excluirProdutoSimples(\''+p.id+'\')">🗑️</button></td>'+
       '</tr>'
@@ -398,6 +407,14 @@ async function salvarPrecoSimples(id, valor){
   const { error } = await sb.from('freezer_produtos_simples').update({ preco }).eq('id', id);
   if (error) alert('Erro ao salvar preço: '+error.message);
   produtosCache = null; // invalida cache combinado (fábrica + simples) usado na Nova Visita
+}
+
+async function salvarUnidadesPorCaixaSimples(id, valor){
+  const v = valor.trim() === '' ? null : Number(valor);
+  if (v !== null && (isNaN(v) || v <= 0)) { alert('Un/Caixa deve ser um número maior que zero, ou vazio.'); return; }
+  const { error } = await sb.from('freezer_produtos_simples').update({ unidades_por_caixa: v }).eq('id', id);
+  if (error) alert('Erro ao salvar Un/Caixa: '+error.message);
+  produtosCache = null; // invalida cache combinado usado na Nova Visita
 }
 
 async function salvarAtivoSimples(id, ativo){
@@ -423,6 +440,7 @@ function abrirModalProdutoSimples(){
   $('mpsCodigo').value = '';
   $('mpsPreco').value = '0';
   $('mpsMarca').value = 'Yeez';
+  $('mpsUnidadesPorCaixa').value = '';
   $('modalProdutoSimples').classList.add('show');
 }
 
@@ -432,9 +450,12 @@ async function salvarProdutoSimples(){
   const codigo = $('mpsCodigo').value.trim() || null;
   const preco = Number($('mpsPreco').value) || 0;
   const marca = $('mpsMarca').value.trim() || null;
+  const upcRaw = $('mpsUnidadesPorCaixa').value.trim();
+  const unidades_por_caixa = upcRaw === '' ? null : Number(upcRaw);
   if (!nome){ showMsg('mpsMsg','Informe o nome do produto.','err'); return; }
+  if (unidades_por_caixa !== null && (isNaN(unidades_por_caixa) || unidades_por_caixa <= 0)){ showMsg('mpsMsg','Un. por caixa deve ser um número maior que zero, ou deixe em branco.','err'); return; }
 
-  const { error } = await sb.from('freezer_produtos_simples').insert({ nome, categoria, codigo, preco, marca });
+  const { error } = await sb.from('freezer_produtos_simples').insert({ nome, categoria, codigo, preco, marca, unidades_por_caixa });
   if (error){ showMsg('mpsMsg','Erro: '+error.message,'err'); return; }
 
   fecharModal('modalProdutoSimples');
@@ -622,7 +643,7 @@ async function carregarProdutosFreezer(){
   if (produtosCache) return produtosCache;
   const [fabR, avulsoR] = await Promise.all([
     sb.from('precificacao_produtos').select('id,nome,categoria').in('categoria', ['Picolés','Potes']).eq('origem','fabrica').eq('ativo', true).order('nome'),
-    sb.from('freezer_produtos_simples').select('id,nome,categoria,preco').eq('ativo', true).order('nome'),
+    sb.from('freezer_produtos_simples').select('id,nome,categoria,preco,unidades_por_caixa').eq('ativo', true).order('nome'),
   ]);
   const fabIds = (fabR.data||[]).map(p => p.id);
   const precoPorProdutoId = {};
@@ -634,8 +655,8 @@ async function carregarProdutosFreezer(){
       if (!atual || p.vigencia_inicio > atual.vigencia_inicio) precoPorProdutoId[p.produto_id] = p;
     });
   }
-  const fab = (fabR.data || []).map(p => ({ produto_id: p.id, produto_avulso_id: null, nome: p.nome, rotulo: p.nome, preco_estimado: precoPorProdutoId[p.id] ? Number(precoPorProdutoId[p.id].preco_venda) : 0 }));
-  const avl = (avulsoR.data || []).map(p => ({ produto_id: null, produto_avulso_id: p.id, nome: p.nome, rotulo: p.nome+' (Yeez — fora da Precificação)', preco_estimado: Number(p.preco)||0 }));
+  const fab = (fabR.data || []).map(p => ({ produto_id: p.id, produto_avulso_id: null, nome: p.nome, rotulo: p.nome, preco_estimado: precoPorProdutoId[p.id] ? Number(precoPorProdutoId[p.id].preco_venda) : 0, unidades_por_caixa: null }));
+  const avl = (avulsoR.data || []).map(p => ({ produto_id: null, produto_avulso_id: p.id, nome: p.nome, rotulo: p.nome+' (Yeez — fora da Precificação)', preco_estimado: Number(p.preco)||0, unidades_por_caixa: p.unidades_por_caixa || null }));
   produtosCache = fab.concat(avl);
   return produtosCache;
 }
@@ -669,7 +690,6 @@ async function renderNovaVisita(){
 
       '<h2 style="font-size:1.05rem;margin-top:22px">Pedido tirado nesta visita</h2>'+
       '<p class="hint">Adicione os sabores/produtos que precisam ser repostos. Digite pra buscar — itens marcados "Yeez" são da linha em descontinuação, com preço simples fora da Precificação.</p>'+
-      '<datalist id="produtosVisitaDatalist">'+produtosCache.map(p => '<option value="'+esc(p.rotulo)+'">').join('')+'</datalist>'+
       '<div id="itensVisitaLista"></div>'+
       '<button class="btn-outline btn btn-sm" onclick="adicionarItemVisita()">+ Adicionar item</button>'+
 
@@ -694,8 +714,13 @@ function renderItensVisita(){
     const catalogado = produtosCache.find(p => (p.produto_id && p.produto_id===it.produto_id) || (p.produto_avulso_id && p.produto_avulso_id===it.produto_avulso_id));
     const precoEstimado = catalogado ? catalogado.preco_estimado : 0;
     const valorLinha = precoEstimado * (Number(it.quantidade)||0);
+    const upc = catalogado ? catalogado.unidades_por_caixa : null;
     return '<div class="item-row">'+
-      '<div class="field"><label>Produto</label><input class="inp" type="text" list="produtosVisitaDatalist" autocomplete="off" value="'+esc(it.produto_nome||'')+'" placeholder="Digite pra buscar…" oninput="atualizarItemProduto('+i+',this.value)"></div>'+
+      '<div class="field autocomplete-wrap"><label>Produto</label>'+
+        '<input class="inp" type="text" autocomplete="off" id="prodInput'+i+'" value="'+esc(it.produto_nome||'')+'" placeholder="Digite pra buscar…" oninput="filtrarItemDropdown('+i+',this.value)" onfocus="abrirItemDropdown('+i+')">'+
+        '<div class="autocomplete-list" id="prodDropdown'+i+'" style="display:none"></div>'+
+        (upc ? '<div style="font-size:.78rem;color:var(--text-light);margin-top:3px">📦 1 caixa = '+upc+' un</div>' : '')+
+      '</div>'+
       '<div class="field qtd"><label>Qtd</label><input class="inp" type="number" min="0.01" step="0.01" value="'+it.quantidade+'" onchange="itensVisitaAtual['+i+'].quantidade=this.value; renderItensVisita()"></div>'+
       '<div class="field un"><label>Unidade</label><select class="inp" onchange="itensVisitaAtual['+i+'].unidade=this.value">'+
         ['un','caixa'].map(u => '<option value="'+u+'" '+(it.unidade===u?'selected':'')+'>'+u+'</option>').join('')+
@@ -712,13 +737,54 @@ function renderItensVisita(){
   wrap.innerHTML += '<p style="text-align:right;font-weight:600;margin-top:8px">Total estimado do pedido: '+fmtMoeda(totalPedido)+' <span style="font-weight:400;color:var(--text-light);font-size:.78rem">(o valor final considera a tabela de preço do cliente, se houver)</span></p>';
 }
 
-function atualizarItemProduto(i, texto){
-  const item = produtosCache.find(p => p.rotulo === texto);
-  if (!item) return; // ainda digitando, não bateu com nenhuma opção do datalist ainda
+function listaProdutosFiltrada(texto){
+  const t = (texto||'').trim().toLowerCase();
+  if (!t) return produtosCache;
+  return produtosCache.filter(p => p.rotulo.toLowerCase().includes(t));
+}
+
+function montarDropdownProdutoHTML(i, lista){
+  if (!lista.length) return '<div class="autocomplete-item autocomplete-empty">Nenhum produto encontrado.</div>';
+  return lista.map(p => '<div class="autocomplete-item" onmousedown="selecionarItemDropdown('+i+','+produtosCache.indexOf(p)+')">'+esc(p.rotulo)+'</div>').join('');
+}
+
+function abrirItemDropdown(i){
+  fecharTodosDropdownsProduto();
+  const dropEl = $('prodDropdown'+i);
+  const inputEl = $('prodInput'+i);
+  if (!dropEl) return;
+  dropEl.innerHTML = montarDropdownProdutoHTML(i, listaProdutosFiltrada(inputEl ? inputEl.value : ''));
+  dropEl.style.display = 'block';
+}
+
+function filtrarItemDropdown(i, texto){
+  // ainda digitando — o texto livre é guardado, mas só vira seleção válida quando bater com um item da lista
+  itensVisitaAtual[i].produto_nome = texto;
+  itensVisitaAtual[i].produto_id = null;
+  itensVisitaAtual[i].produto_avulso_id = null;
+  const dropEl = $('prodDropdown'+i);
+  if (!dropEl) return;
+  dropEl.innerHTML = montarDropdownProdutoHTML(i, listaProdutosFiltrada(texto));
+  dropEl.style.display = 'block';
+}
+
+function selecionarItemDropdown(i, idx){
+  const item = produtosCache[idx];
+  if (!item) return;
   itensVisitaAtual[i].produto_id = item.produto_id;
   itensVisitaAtual[i].produto_avulso_id = item.produto_avulso_id;
   itensVisitaAtual[i].produto_nome = item.nome;
+  fecharTodosDropdownsProduto();
+  renderItensVisita(); // atualiza valor estimado e o hint de "1 caixa = N un" da linha
 }
+
+function fecharTodosDropdownsProduto(){
+  document.querySelectorAll('.autocomplete-list').forEach(el => el.style.display = 'none');
+}
+
+document.addEventListener('click', function(e){
+  if (!e.target.closest('.autocomplete-wrap')) fecharTodosDropdownsProduto();
+});
 
 function adicionarItemVisita(){
   if (!produtosCache.length){ alert('Nenhum produto de Picolés/Potes (nem da linha Yeez) disponível.'); return; }
