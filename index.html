@@ -236,6 +236,33 @@
   </div>
 </div>
 
+<div class="modal-overlay" id="modalRota">
+  <div class="modal" style="max-width:640px">
+    <h3 id="mrTitulo">Nova Rota</h3>
+    <input type="hidden" id="mrId">
+    <div class="field" style="margin-bottom:10px"><label>Nome da rota</label><input class="inp" id="mrNome" placeholder="Ex: Segunda-feira — Zona Norte"></div>
+    <div class="field" id="mrRepositorWrap" style="margin-bottom:10px;display:none"><label>Repositor</label>
+      <select class="inp" id="mrRepositor" onchange="mrCarregarFreezersDisponiveis()"></select>
+    </div>
+    <div class="row" style="align-items:flex-end;margin-bottom:6px">
+      <div class="field" style="flex:2"><label>Adicionar freezer</label>
+        <select class="inp" id="mrFreezerAdd"><option value="">— selecione —</option></select>
+      </div>
+      <button class="btn-outline btn btn-sm" onclick="mrAdicionarParada()">+ Adicionar</button>
+    </div>
+    <p class="hint" style="margin:2px 0 8px">Arraste a ordem com as setas, ou clique em "🔀 Ordenar por proximidade" pra deixar o app sugerir a sequência.</p>
+    <div class="row" style="margin-bottom:8px">
+      <button class="btn-outline btn btn-sm" onclick="mrOrdenarProximidade()">🔀 Ordenar por proximidade</button>
+    </div>
+    <div id="mrParadasLista"></div>
+    <div class="modal-actions" style="margin-top:16px">
+      <button class="btn" onclick="salvarRota()">Salvar Rota</button>
+      <button class="btn-outline btn" onclick="fecharModal('modalRota')">Cancelar</button>
+    </div>
+    <div class="msg" id="mrMsg"></div>
+  </div>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
@@ -255,6 +282,12 @@ let freezersCache = [];
 let produtosCache = null;
 let itensVisitaAtual = [];
 let fotosVisitaAtual = [];
+let rtSubTab = 'salvas';
+let rtRepositoresCache = null;
+let rtRepositorSelecionado = null;
+let rotasSugeridasCache = null;
+let mrParadas = [];
+let mrFreezersDisponiveis = [];
 
 function esc(s){ return (s==null?'':String(s)).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function fmtData(d){ return d ? new Date(d+'T12:00').toLocaleDateString('pt-BR') : '—'; }
@@ -1138,29 +1171,43 @@ function linkGoogleMaps(pontos){
 }
 
 async function renderRotas(){
-  $('mainContent').innerHTML = '<div class="loading">Carregando…</div>';
-
-  let selectorRepositor = '';
-  if (souBackoffice){
-    const { data: repositores } = await sb.rpc('freezers_listar_repositores');
-    selectorRepositor = '<div class="field" style="flex:1"><label>Repositor</label><select class="inp" id="rtRepositor" onchange="carregarRotas()">'+
-      '<option value="">— selecione —</option>'+
-      (repositores||[]).map(r => '<option value="'+r.id+'">'+esc(r.nome)+'</option>').join('')+
-    '</select></div>';
-  }
-
   $('mainContent').innerHTML =
     '<div class="card">'+
-      '<h2>Sugestão de Rotas</h2>'+
-      '<p class="hint">Agrupa os freezers ativos da carteira por proximidade e sugere uma ordem de visita em cada grupo. É uma sugestão — ajuste com o conhecimento de quem roda a região.</p>'+
-      '<div class="row" style="margin-top:10px">'+
-        selectorRepositor+
-        '<div class="field" style="max-width:160px"><label>Paradas por rota</label><input class="inp" type="number" min="3" max="15" value="7" id="rtTamanho" onchange="carregarRotas()"></div>'+
+      '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">'+
+        '<h2 style="margin:0">Rotas</h2>'+
+        '<button class="btn btn-sm" onclick="abrirModalRota()">+ Nova rota</button>'+
       '</div>'+
-      '<div id="rtConteudo" style="margin-top:14px">'+(souBackoffice?'<div class="empty">Escolha um repositor.</div>':'<div class="loading">Carregando…</div>')+'</div>'+
+      '<div class="row" style="margin-top:14px;gap:8px">'+
+        '<button class="btn'+(rtSubTab==='salvas'?'':'-outline')+' btn-sm" onclick="rtSubTab=\'salvas\';renderRotas()">💾 Minhas Rotas Salvas</button>'+
+        '<button class="btn'+(rtSubTab==='auto'?'':'-outline')+' btn-sm" onclick="rtSubTab=\'auto\';renderRotas()">📍 Sugestão Automática</button>'+
+      '</div>'+
+      '<div id="rtSubConteudo" style="margin-top:14px"><div class="loading">Carregando…</div></div>'+
     '</div>';
 
-  if (!souBackoffice) await carregarRotas();
+  if (rtSubTab === 'salvas') await carregarRotasSalvas();
+  else await carregarRotasSugestao();
+}
+
+async function carregarRotasSugestao(){
+  const el = $('rtSubConteudo');
+
+  if (souBackoffice && !rtRepositoresCache){
+    const { data } = await sb.rpc('freezers_listar_repositores');
+    rtRepositoresCache = data || [];
+  }
+
+  el.innerHTML =
+    '<p class="hint">Agrupa os freezers ativos da carteira por proximidade e sugere uma ordem de visita em cada grupo. É uma sugestão — ajuste com o conhecimento de quem roda a região, ou salve como rota fixa pra reutilizar.</p>'+
+    '<div class="row" style="margin-top:10px">'+
+      (souBackoffice ? '<div class="field" style="flex:1"><label>Repositor</label><select class="inp" id="rtRepositor" onchange="carregarRotas()">'+
+        '<option value="">— selecione —</option>'+
+        (rtRepositoresCache||[]).map(r => '<option value="'+r.id+'"'+(rtRepositorSelecionado===r.id?' selected':'')+'>'+esc(r.nome)+'</option>').join('')+
+      '</select></div>' : '')+
+      '<div class="field" style="max-width:160px"><label>Paradas por rota</label><input class="inp" type="number" min="3" max="15" value="7" id="rtTamanho" onchange="carregarRotas()"></div>'+
+    '</div>'+
+    '<div id="rtConteudo" style="margin-top:14px">'+(souBackoffice && !rtRepositorSelecionado ?'<div class="empty">Escolha um repositor.</div>':'<div class="loading">Carregando…</div>')+'</div>';
+
+  if (!souBackoffice || rtRepositorSelecionado) await carregarRotas();
 }
 
 async function carregarRotas(){
@@ -1174,6 +1221,7 @@ async function carregarRotas(){
   let pontos = todos || [];
   if (souBackoffice){
     const repositorId = $('rtRepositor') ? $('rtRepositor').value : '';
+    rtRepositorSelecionado = repositorId || null;
     if (!repositorId){ el.innerHTML = '<div class="empty">Escolha um repositor.</div>'; return; }
     pontos = pontos.filter(f => f.repositor_id === repositorId);
   }
@@ -1181,6 +1229,7 @@ async function carregarRotas(){
   if (!pontos.length){ el.innerHTML = '<div class="empty">Nenhum freezer geocodificado nessa carteira ainda.</div>'; return; }
 
   const clusters = clusterizarFreezers(pontos, tamanhoAlvo).map(c => ordenarRotaMaisProximo(c));
+  rotasSugeridasCache = clusters;
 
   el.innerHTML = '<p class="hint" style="margin-bottom:14px">'+pontos.length+' freezer(s) geocodificado(s), agrupados em '+clusters.length+' rota(s).</p>'+
     clusters.map((rota, i) => {
@@ -1188,13 +1237,191 @@ async function carregarRotas(){
       return '<div class="card" style="background:var(--creme)">'+
         '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">'+
           '<div class="fnome">Rota '+(i+1)+' — '+rota.length+' parada(s) · ~'+km.toFixed(0)+' km entre paradas</div>'+
-          '<a class="btn btn-sm" href="'+linkGoogleMaps(rota)+'" target="_blank">📍 Abrir no Google Maps</a>'+
+          '<div style="display:flex;gap:8px">'+
+            '<button class="btn-outline btn btn-sm" onclick="abrirModalRota(null, '+i+')">💾 Salvar como rota</button>'+
+            '<a class="btn btn-sm" href="'+linkGoogleMaps(rota)+'" target="_blank">📍 Abrir no Google Maps</a>'+
+          '</div>'+
         '</div>'+
         '<ol style="margin:10px 0 0 20px;padding:0;font-size:.85rem">'+
           rota.map(p => '<li style="margin-bottom:6px"><b>'+esc(p.ponto_venda)+'</b>'+(p.rede?' — '+esc(p.rede):'')+'<br><span style="color:var(--text-light)">'+esc(p.endereco||'—')+'</span></li>').join('')+
         '</ol>'+
       '</div>';
     }).join('');
+}
+
+async function carregarRotasSalvas(){
+  const el = $('rtSubConteudo');
+  el.innerHTML = '<div class="loading">Carregando…</div>';
+
+  const { data: rotas, error } = await sb.from('freezer_rotas').select('id, nome, repositor_id, atualizado_em').order('nome');
+  if (error){ el.innerHTML = '<div class="empty">Erro: '+esc(error.message)+'</div>'; return; }
+
+  if (!rotas || !rotas.length){ el.innerHTML = '<div class="empty">Nenhuma rota salva ainda. Crie uma com "+ Nova rota" ou salve uma sugestão automática.</div>'; return; }
+
+  let nomePorRepositor = {};
+  if (souBackoffice){
+    if (!rtRepositoresCache){ const { data } = await sb.rpc('freezers_listar_repositores'); rtRepositoresCache = data || []; }
+    rtRepositoresCache.forEach(r => { nomePorRepositor[r.id] = r.nome; });
+  }
+
+  const { data: paradas } = await sb.from('freezer_rota_paradas').select('rota_id, ordem, freezers(id, ponto_venda, rede, endereco, latitude, longitude)').order('ordem');
+  const paradasPorRota = {};
+  (paradas||[]).forEach(p => {
+    if (!p.freezers) return; // freezer pode ter sido excluído
+    (paradasPorRota[p.rota_id] = paradasPorRota[p.rota_id] || []).push(p.freezers);
+  });
+
+  el.innerHTML = rotas.map(r => {
+    const pts = paradasPorRota[r.id] || [];
+    const nomeRepositor = souBackoffice ? nomePorRepositor[r.repositor_id] : null;
+    return '<div class="card" style="background:var(--creme)">'+
+      '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">'+
+        '<div class="fnome">'+esc(r.nome)+(nomeRepositor ? ' <span style="font-weight:400;color:var(--text-light);font-size:.78rem">— '+esc(nomeRepositor)+'</span>' : '')+'</div>'+
+        '<div style="display:flex;gap:8px;flex-wrap:wrap">'+
+          '<button class="btn-outline btn btn-sm" onclick="abrirModalRota(\''+r.id+'\')">✏️ Editar</button>'+
+          (pts.length ? '<a class="btn btn-sm" href="'+linkGoogleMaps(pts)+'" target="_blank">📍 Abrir no Google Maps</a>' : '')+
+          '<button class="btn-danger btn-sm" onclick="excluirRota(\''+r.id+'\',\''+esc(r.nome).replace(/'/g,"\\'")+'\')">🗑️ Excluir</button>'+
+        '</div>'+
+      '</div>'+
+      (pts.length
+        ? '<ol style="margin:10px 0 0 20px;padding:0;font-size:.85rem">'+pts.map(p => '<li style="margin-bottom:6px"><b>'+esc(p.ponto_venda)+'</b>'+(p.rede?' — '+esc(p.rede):'')+'<br><span style="color:var(--text-light)">'+esc(p.endereco||'—')+'</span></li>').join('')+'</ol>'
+        : '<p class="hint" style="margin-top:8px">Nenhuma parada adicionada ainda — clique em Editar.</p>')+
+    '</div>';
+  }).join('');
+}
+
+async function excluirRota(id, nome){
+  if (!confirm('Excluir a rota "'+nome+'"? Isso não apaga os freezers, só a rota salva.')) return;
+  const { error } = await sb.from('freezer_rotas').delete().eq('id', id);
+  if (error){ alert('Erro ao excluir: '+error.message); return; }
+  await carregarRotasSalvas();
+}
+
+// ── Modal de criar/editar rota ──────────────────────────
+async function abrirModalRota(rotaId, indiceSugestao){
+  $('mrMsg').className = 'msg';
+  $('mrId').value = rotaId || '';
+  $('mrTitulo').textContent = rotaId ? 'Editar Rota' : 'Nova Rota';
+  $('mrNome').value = '';
+  mrParadas = [];
+
+  const wrapRepositor = $('mrRepositorWrap');
+  if (souBackoffice){
+    wrapRepositor.style.display = '';
+    if (!rtRepositoresCache){ const { data } = await sb.rpc('freezers_listar_repositores'); rtRepositoresCache = data || []; }
+    $('mrRepositor').innerHTML = '<option value="">— selecione —</option>'+rtRepositoresCache.map(r => '<option value="'+r.id+'">'+esc(r.nome)+'</option>').join('');
+  } else {
+    wrapRepositor.style.display = 'none';
+  }
+
+  if (rotaId){
+    const { data: rota, error } = await sb.from('freezer_rotas').select('*').eq('id', rotaId).single();
+    if (error){ alert('Erro ao carregar rota: '+error.message); return; }
+    $('mrNome').value = rota.nome;
+    if (souBackoffice) $('mrRepositor').value = rota.repositor_id || '';
+    const { data: paradas } = await sb.from('freezer_rota_paradas').select('ordem, freezers(id, ponto_venda, rede, endereco, latitude, longitude)').eq('rota_id', rotaId).order('ordem');
+    mrParadas = (paradas||[]).filter(p => p.freezers).map(p => p.freezers);
+  } else if (indiceSugestao != null && rotasSugeridasCache && rotasSugeridasCache[indiceSugestao]){
+    mrParadas = rotasSugeridasCache[indiceSugestao].slice();
+    if (souBackoffice && rtRepositorSelecionado) $('mrRepositor').value = rtRepositorSelecionado;
+  }
+
+  await mrCarregarFreezersDisponiveis();
+  mrRenderParadasLista();
+  $('modalRota').classList.add('show');
+}
+
+async function mrCarregarFreezersDisponiveis(){
+  const repositorId = souBackoffice ? $('mrRepositor').value : meuPerfil.id;
+  const selectAdd = $('mrFreezerAdd');
+  if (!repositorId){ mrFreezersDisponiveis = []; selectAdd.innerHTML = '<option value="">— escolha um repositor primeiro —</option>'; return; }
+
+  const { data, error } = await sb.from('freezers').select('id, ponto_venda, rede, endereco, latitude, longitude').eq('status','ativo').eq('repositor_id', repositorId).not('latitude','is',null).order('ponto_venda');
+  if (error){ selectAdd.innerHTML = '<option value="">Erro ao carregar</option>'; return; }
+  mrFreezersDisponiveis = data || [];
+  mrAtualizarSelectAdd();
+}
+
+function mrAtualizarSelectAdd(){
+  const selectAdd = $('mrFreezerAdd');
+  const idsNaRota = new Set(mrParadas.map(p => p.id));
+  const disponiveis = mrFreezersDisponiveis.filter(f => !idsNaRota.has(f.id));
+  selectAdd.innerHTML = '<option value="">— selecione —</option>'+
+    disponiveis.map(f => '<option value="'+f.id+'">'+esc(f.ponto_venda)+(f.rede?' — '+esc(f.rede):'')+'</option>').join('');
+}
+
+function mrAdicionarParada(){
+  const id = $('mrFreezerAdd').value;
+  if (!id) return;
+  const freezer = mrFreezersDisponiveis.find(f => f.id === id);
+  if (!freezer) return;
+  mrParadas.push(freezer);
+  mrAtualizarSelectAdd();
+  mrRenderParadasLista();
+}
+
+function mrRemoverParada(idx){
+  mrParadas.splice(idx, 1);
+  mrAtualizarSelectAdd();
+  mrRenderParadasLista();
+}
+
+function mrMoverParada(idx, direcao){
+  const novoIdx = idx + direcao;
+  if (novoIdx < 0 || novoIdx >= mrParadas.length) return;
+  [mrParadas[idx], mrParadas[novoIdx]] = [mrParadas[novoIdx], mrParadas[idx]];
+  mrRenderParadasLista();
+}
+
+function mrOrdenarProximidade(){
+  if (mrParadas.length < 2) return;
+  mrParadas = ordenarRotaMaisProximo(mrParadas);
+  mrRenderParadasLista();
+}
+
+function mrRenderParadasLista(){
+  const el = $('mrParadasLista');
+  if (!mrParadas.length){ el.innerHTML = '<p class="hint">Nenhuma parada adicionada ainda.</p>'; return; }
+  el.innerHTML = '<ol style="margin:0 0 0 4px;padding:0;list-style:none">'+
+    mrParadas.map((p, i) => (
+      '<li style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--creme-dark)">'+
+        '<span style="font-weight:600;color:var(--text-light);min-width:22px">'+(i+1)+'.</span>'+
+        '<span style="flex:1;font-size:.88rem"><b>'+esc(p.ponto_venda)+'</b>'+(p.rede?' — '+esc(p.rede):'')+'<br><span style="color:var(--text-light);font-size:.8rem">'+esc(p.endereco||'—')+'</span></span>'+
+        '<button class="btn-outline btn btn-sm" style="padding:4px 8px" onclick="mrMoverParada('+i+',-1)" '+(i===0?'disabled':'')+'>▲</button>'+
+        '<button class="btn-outline btn btn-sm" style="padding:4px 8px" onclick="mrMoverParada('+i+',1)" '+(i===mrParadas.length-1?'disabled':'')+'>▼</button>'+
+        '<button class="btn-danger btn-sm" style="padding:4px 8px" onclick="mrRemoverParada('+i+')">🗑️</button>'+
+      '</li>'
+    )).join('')+
+  '</ol>';
+}
+
+async function salvarRota(){
+  const nome = $('mrNome').value.trim();
+  const rotaId = $('mrId').value || null;
+  const repositorId = souBackoffice ? ($('mrRepositor').value || null) : meuPerfil.id;
+
+  if (!nome){ showMsg('mrMsg','Dê um nome pra rota.','err'); return; }
+  if (souBackoffice && !repositorId){ showMsg('mrMsg','Escolha o repositor dono da rota.','err'); return; }
+  if (!mrParadas.length){ showMsg('mrMsg','Adicione ao menos uma parada.','err'); return; }
+
+  let id = rotaId;
+  if (id){
+    const { error } = await sb.from('freezer_rotas').update({ nome, repositor_id: repositorId }).eq('id', id);
+    if (error){ showMsg('mrMsg','Erro: '+error.message,'err'); return; }
+    await sb.from('freezer_rota_paradas').delete().eq('rota_id', id);
+  } else {
+    const { data, error } = await sb.from('freezer_rotas').insert({ nome, repositor_id: repositorId }).select('id').single();
+    if (error){ showMsg('mrMsg','Erro: '+error.message,'err'); return; }
+    id = data.id;
+  }
+
+  const linhas = mrParadas.map((p, i) => ({ rota_id: id, freezer_id: p.id, ordem: i+1 }));
+  const { error: errParadas } = await sb.from('freezer_rota_paradas').insert(linhas);
+  if (errParadas){ showMsg('mrMsg','Rota salva, mas houve erro ao gravar as paradas: '+errParadas.message,'err'); return; }
+
+  fecharModal('modalRota');
+  rtSubTab = 'salvas';
+  await renderRotas();
 }
 
 verificarAcessoEIniciar();
