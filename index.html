@@ -294,6 +294,8 @@ let semanaDiasUteis = { seg:true, ter:true, qua:true, qui:true, sex:true };
 let semanaDataInicio = null;
 let semanaResultado = null;
 let semanaSemGeo = [];
+let semanaSobra = [];
+let semanaMaxPorDia = null;
 let semanaPrazoIdealCache = 15;
 let semanaCacheRepositorId = null;
 let mrParadas = [];
@@ -1436,7 +1438,7 @@ async function carregarPlanejamentoSemanal(){
   if (!semanaDataInicio) semanaDataInicio = isoDateStr(segundaDaSemana(new Date()));
 
   el.innerHTML =
-    '<p class="hint">A lista vem ordenada dos clientes há mais tempo sem visita pro mais recente, com quem já passou do prazo ideal (aba Frequência de Visitas) pré-marcado. Ajuste a seleção como quiser, escolha os dias úteis disponíveis e gere a rota otimizada por dia.</p>'+
+    '<p class="hint">A lista vem ordenada dos clientes há mais tempo sem visita pro mais recente, com quem já passou do prazo ideal (aba Frequência de Visitas) pré-marcado. Ajuste a seleção como quiser (ou use o filtro rápido abaixo), defina um limite de visitas por dia se quiser, escolha os dias úteis disponíveis e gere a rota otimizada por dia.</p>'+
     (souBackoffice ? '<div class="field" style="max-width:280px;margin-bottom:10px"><label>Repositor</label><select class="inp" id="semRepositor" onchange="mudarRepositorSemanal()">'+
       '<option value="">— selecione —</option>'+
       (rtRepositoresCache||[]).map(r => '<option value="'+r.id+'"'+(semanaRepositorAtual===r.id?' selected':'')+'>'+esc(r.nome)+'</option>').join('')+
@@ -1505,9 +1507,15 @@ function renderSemanal(){
   el.innerHTML =
     '<div class="row" style="gap:16px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px">'+
       '<div class="field" style="max-width:180px"><label>Semana de (segunda-feira)</label><input class="inp" type="date" id="semDataInicio" value="'+semanaDataInicio+'" onchange="mudarDataInicioSemanal()"></div>'+
+      '<div class="field" style="max-width:170px"><label>Máx. de visitas por dia</label><input class="inp" type="number" min="1" step="1" id="semMaxPorDia" placeholder="Sem limite" value="'+(semanaMaxPorDia||'')+'" onchange="mudarMaxPorDiaSemanal(this)"></div>'+
       '<div class="field" style="flex:1"><label>Dias úteis disponíveis</label><div style="display:flex;gap:12px;flex-wrap:wrap;padding-top:6px">'+
         DIAS_UTEIS_DEFS.map(([chave,nome]) => '<label style="display:flex;align-items:center;gap:5px;font-size:.82rem;font-weight:400"><input type="checkbox" '+(semanaDiasUteis[chave]?'checked':'')+' onchange="semanaDiasUteis[\''+chave+'\']=this.checked"> '+nome+'</label>').join('')+
       '</div></div>'+
+    '</div>'+
+    '<div class="row" style="gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px;padding:10px 12px;background:var(--creme);border-radius:8px">'+
+      '<div class="field" style="max-width:220px;margin:0"><label>Filtro rápido de seleção</label><input class="inp" type="number" min="0" step="1" id="semFiltroDias" placeholder="Ex: 20"></div>'+
+      '<button class="btn-outline btn btn-sm" onclick="aplicarFiltroDiasSemanal()">Selecionar sem visita há X+ dias</button>'+
+      '<span class="hint" style="margin:0">Substitui a seleção atual pelos clientes que batem com o filtro.</span>'+
     '</div>'+
     '<div class="table-wrap"><table><thead><tr><th style="width:34px"><input type="checkbox" id="semSelecionarTodos" onchange="alternarSelecaoTodosSemanal(this.checked)"></th><th>Cliente</th><th>Cidade</th><th>Última visita</th><th>Dias sem visita</th><th>Status</th></tr></thead><tbody>'+
       semanaClientesCache.map(f => {
@@ -1563,6 +1571,28 @@ function atualizarCheckboxTodosSemanal(){
   todos.indeterminate = marcados > 0 && marcados < total;
 }
 
+function mudarMaxPorDiaSemanal(input){
+  const v = input.value ? Math.max(1, Number(input.value)) : null;
+  semanaMaxPorDia = v;
+  input.value = v || '';
+}
+
+function aplicarFiltroDiasSemanal(){
+  const bruto = $('semFiltroDias').value;
+  if (bruto.trim() === ''){ alert('Informe um número de dias pra filtrar.'); return; }
+  const v = Number(bruto);
+  if (isNaN(v) || v < 0){ alert('Informe um número de dias válido.'); return; }
+  semanaSelecionados = new Set(
+    semanaClientesCache.filter(f => f.dias == null || f.dias >= v).map(f => f.id)
+  );
+  document.querySelectorAll('.sem-check-cliente').forEach(cb => {
+    cb.checked = semanaSelecionados.has(cb.dataset.freezerId);
+  });
+  const c = $('semContador');
+  if (c) c.textContent = semanaSelecionados.size+' cliente(s) selecionado(s)';
+  atualizarCheckboxTodosSemanal();
+}
+
 function mudarDataInicioSemanal(){
   semanaDataInicio = $('semDataInicio').value;
   semanaResultado = null;
@@ -1570,15 +1600,27 @@ function mudarDataInicioSemanal(){
   if (r) r.innerHTML = '';
 }
 
-function distribuirClientesPorDias(pontos, nDias){
-  if (!pontos.length || nDias < 1) return [];
-  const tamanhoAlvo = Math.max(1, Math.ceil(pontos.length / nDias));
+function distribuirClientesPorDias(pontos, nDias, maxPorDia){
+  if (!pontos.length || nDias < 1) return { grupos: [], sobra: [] };
+
+  let tamanhoAlvo = Math.max(1, Math.ceil(pontos.length / nDias));
+  if (maxPorDia) tamanhoAlvo = Math.min(tamanhoAlvo, maxPorDia);
+
   let clusters = clusterizarFreezers(pontos, tamanhoAlvo);
-  while (clusters.length > nDias){
-    const extra = clusters.pop();
-    clusters[clusters.length-1] = clusters[clusters.length-1].concat(extra);
+
+  if (!maxPorDia){
+    // sem limite diário: funde o excedente no último dia, como antes
+    while (clusters.length > nDias){
+      const extra = clusters.pop();
+      clusters[clusters.length-1] = clusters[clusters.length-1].concat(extra);
+    }
+    return { grupos: clusters.map(c => ordenarRotaMaisProximo(c)), sobra: [] };
   }
-  return clusters.map(c => ordenarRotaMaisProximo(c));
+
+  // com limite diário: não dá pra fundir sem estourar o limite — o que não couber vira sobra
+  const grupos = clusters.slice(0, nDias).map(c => ordenarRotaMaisProximo(c));
+  const sobra = clusters.length > nDias ? clusters.slice(nDias).flat() : [];
+  return { grupos, sobra };
 }
 
 function gerarRotaSemanal(){
@@ -1591,7 +1633,8 @@ function gerarRotaSemanal(){
   const comGeo = selecionados.filter(f => f.latitude && f.longitude);
   semanaSemGeo = selecionados.filter(f => !f.latitude || !f.longitude);
 
-  const grupos = distribuirClientesPorDias(comGeo, diasAtivos.length);
+  const { grupos, sobra } = distribuirClientesPorDias(comGeo, diasAtivos.length, semanaMaxPorDia);
+  semanaSobra = sobra;
 
   semanaResultado = diasAtivos.map(([chave,nome], i) => {
     const data = new Date(semanaDataInicio+'T12:00');
@@ -1611,6 +1654,7 @@ function renderResultadoSemanal(){
 
   el.innerHTML =
     (semanaSemGeo.length ? '<div class="msg show err" style="margin-bottom:12px">'+semanaSemGeo.length+' cliente(s) selecionado(s) sem geolocalização cadastrada, por isso ficaram de fora da rota: '+semanaSemGeo.map(f=>esc(f.ponto_venda)).join(', ')+'.</div>' : '')+
+    (semanaSobra.length ? '<div class="msg show err" style="margin-bottom:12px">'+semanaSobra.length+' cliente(s) não couberam nos dias/limite disponíveis: '+semanaSobra.map(f=>esc(f.ponto_venda)).join(', ')+'. Aumente o número de dias úteis, aumente o limite de visitas por dia, ou remova alguém da seleção.</div>' : '')+
     semanaResultado.map((g, i) => {
       const nomeCompleto = g.nome+' — '+fmtData(g.data);
       if (!g.paradas.length){
