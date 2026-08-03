@@ -912,7 +912,10 @@ async function carregarHistorico(){
             '<strong>'+esc(v.freezers ? v.freezers.ponto_venda : '—')+'</strong> — '+fmtData(v.data_visita)+
             '<div style="font-size:.76rem;color:var(--text-light)">Repositor: '+esc(v.repositor_nome)+'</div>'+
           '</div>'+
-          '<button class="btn-outline btn btn-sm" onclick="verFotosVisita(\''+v.freezer_id+'\',\''+v.id+'\')">📷 Ver fotos</button>'+
+          '<div style="display:flex;gap:6px">'+
+            '<button class="btn-outline btn btn-sm" onclick="verFotosVisita(\''+v.freezer_id+'\',\''+v.id+'\')">📷 Ver fotos</button>'+
+            (souBackoffice ? '<button class="btn-outline btn btn-sm" style="color:#B43C3C;border-color:#E9B9A9" onclick="excluirVisita(\''+v.id+'\')" title="Excluir visita inteira (registrada por engano ou teste)">🗑 Excluir visita</button>' : '')+
+          '</div>'+
         '</div>'+
         '<div class="visita-flags">'+
           '<span class="flag-pill '+(v.higienizacao?'on':'')+'">'+(v.higienizacao?'✓':'—')+' Higienização</span>'+
@@ -922,13 +925,29 @@ async function carregarHistorico(){
           (v.risco_falha_geral ? '<span class="flag-pill" style="background:#FDEDEC;color:#B43C3C">🚨 Risco de falha geral</span>' : '')+
         '</div>'+
         (v.observacoes ? '<p style="font-size:.8rem;margin-top:8px">'+esc(v.observacoes)+'</p>' : '')+
-        (seusItens.length ? '<div class="table-wrap" style="margin-top:10px"><table><thead><tr><th>Produto</th><th>Qtd</th><th>Un.</th><th>Valor unit.</th><th>Total</th></tr></thead><tbody>'+
-          seusItens.map(it => '<tr><td>'+esc(it.produto_nome)+'</td><td>'+it.quantidade+'</td><td>'+esc(it.unidade)+'</td><td>'+fmtMoeda(it.valor_unitario)+'</td><td>'+fmtMoeda(it.quantidade*it.valor_unitario)+'</td></tr>').join('')+
-          '<tr><td colspan="4" style="text-align:right;font-weight:600">Total da visita</td><td style="font-weight:600">'+fmtMoeda(seusItens.reduce((s,it)=>s+it.quantidade*it.valor_unitario,0))+'</td></tr>'+
+        (seusItens.length ? '<div class="table-wrap" style="margin-top:10px"><table><thead><tr><th>Produto</th><th>Qtd</th><th>Un.</th><th>Valor unit.</th><th>Total</th>'+(souBackoffice?'<th></th>':'')+'</tr></thead><tbody>'+
+          seusItens.map(it => '<tr><td>'+esc(it.produto_nome)+'</td><td>'+it.quantidade+'</td><td>'+esc(it.unidade)+'</td><td>'+fmtMoeda(it.valor_unitario)+'</td><td>'+fmtMoeda(it.quantidade*it.valor_unitario)+'</td>'+
+            (souBackoffice ? '<td><button class="btn-outline btn btn-sm" style="color:#B43C3C;border-color:#E9B9A9;padding:2px 8px" onclick="excluirItemVisita(\''+it.id+'\',\''+v.id+'\')" title="Excluir só este item (registrado por engano ou teste)">🗑</button></td>' : '')+
+          '</tr>').join('')+
+          '<tr><td colspan="4" style="text-align:right;font-weight:600">Total da visita</td><td style="font-weight:600">'+fmtMoeda(seusItens.reduce((s,it)=>s+it.quantidade*it.valor_unitario,0))+'</td>'+(souBackoffice?'<td></td>':'')+'</tr>'+
         '</tbody></table></div>' : '')+
       '</div>'
     );
   }).join('');
+}
+
+async function excluirVisita(visitaId){
+  if (!confirm('Excluir esta visita inteira, com todos os itens? Essa ação não pode ser desfeita.')) return;
+  const { error } = await sb.from('freezer_visitas').delete().eq('id', visitaId);
+  if (error){ alert('Erro ao excluir: '+error.message); return; }
+  await carregarHistorico();
+}
+
+async function excluirItemVisita(itemId, visitaId){
+  if (!confirm('Excluir este item da visita? Essa ação não pode ser desfeita.')) return;
+  const { error } = await sb.from('freezer_visita_itens').delete().eq('id', itemId);
+  if (error){ alert('Erro ao excluir: '+error.message); return; }
+  await carregarHistorico();
 }
 
 async function verFotosVisita(freezerId, visitaId){
