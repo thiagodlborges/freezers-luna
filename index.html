@@ -1509,7 +1509,7 @@ function renderSemanal(){
         DIAS_UTEIS_DEFS.map(([chave,nome]) => '<label style="display:flex;align-items:center;gap:5px;font-size:.82rem;font-weight:400"><input type="checkbox" '+(semanaDiasUteis[chave]?'checked':'')+' onchange="semanaDiasUteis[\''+chave+'\']=this.checked"> '+nome+'</label>').join('')+
       '</div></div>'+
     '</div>'+
-    '<div class="table-wrap"><table><thead><tr><th style="width:34px"></th><th>Cliente</th><th>Cidade</th><th>Última visita</th><th>Dias sem visita</th><th>Status</th></tr></thead><tbody>'+
+    '<div class="table-wrap"><table><thead><tr><th style="width:34px"><input type="checkbox" id="semSelecionarTodos" onchange="alternarSelecaoTodosSemanal(this.checked)"></th><th>Cliente</th><th>Cidade</th><th>Última visita</th><th>Dias sem visita</th><th>Status</th></tr></thead><tbody>'+
       semanaClientesCache.map(f => {
         let pill;
         if (f.dias == null) pill = '<span class="flag-pill" style="background:#FDEDEC;color:#B43C3C">🔴 Nunca visitado</span>';
@@ -1518,7 +1518,7 @@ function renderSemanal(){
         else pill = '<span class="flag-pill on">🟢 '+f.dias+' dias</span>';
         const semGeo = !f.latitude || !f.longitude;
         return '<tr>'+
-          '<td><input type="checkbox" '+(semanaSelecionados.has(f.id)?'checked':'')+' onchange="toggleSelecaoSemanal(\''+f.id+'\',this.checked)"></td>'+
+          '<td><input type="checkbox" class="sem-check-cliente" data-freezer-id="'+f.id+'" '+(semanaSelecionados.has(f.id)?'checked':'')+' onchange="toggleSelecaoSemanal(\''+f.id+'\',this.checked)"></td>'+
           '<td>'+esc(f.ponto_venda)+(f.rede?' — '+esc(f.rede):'')+(semGeo?' <span style="color:#B43C3C;font-size:.7rem">(sem geolocalização — fica de fora da rota)</span>':'')+'</td>'+
           '<td>'+esc(f.cidade||'—')+'</td>'+
           '<td>'+(f.ultima?fmtData(f.ultima):'—')+'</td>'+
@@ -1533,6 +1533,7 @@ function renderSemanal(){
     '</div>'+
     '<div id="semResultado" style="margin-top:16px"></div>';
 
+  atualizarCheckboxTodosSemanal();
   if (semanaResultado) renderResultadoSemanal();
 }
 
@@ -1540,6 +1541,26 @@ function toggleSelecaoSemanal(id, marcado){
   if (marcado) semanaSelecionados.add(id); else semanaSelecionados.delete(id);
   const c = $('semContador');
   if (c) c.textContent = semanaSelecionados.size+' cliente(s) selecionado(s)';
+  atualizarCheckboxTodosSemanal();
+}
+
+function alternarSelecaoTodosSemanal(marcarTodos){
+  if (marcarTodos) semanaClientesCache.forEach(f => semanaSelecionados.add(f.id));
+  else semanaSelecionados.clear();
+
+  document.querySelectorAll('.sem-check-cliente').forEach(cb => { cb.checked = marcarTodos; });
+  const c = $('semContador');
+  if (c) c.textContent = semanaSelecionados.size+' cliente(s) selecionado(s)';
+  atualizarCheckboxTodosSemanal();
+}
+
+function atualizarCheckboxTodosSemanal(){
+  const todos = $('semSelecionarTodos');
+  if (!todos) return;
+  const total = semanaClientesCache.length;
+  const marcados = semanaClientesCache.filter(f => semanaSelecionados.has(f.id)).length;
+  todos.checked = total > 0 && marcados === total;
+  todos.indeterminate = marcados > 0 && marcados < total;
 }
 
 function mudarDataInicioSemanal(){
