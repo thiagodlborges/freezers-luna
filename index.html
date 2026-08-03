@@ -140,6 +140,7 @@
   <div class="tab" id="tabPainel" data-tab="painel" onclick="mudarTab('painel')">📈 Painel</div>
   <div class="tab" id="tabVendasDia" data-tab="vendasdia" onclick="mudarTab('vendasdia')">🧾 Vendas do Dia</div>
   <div class="tab" id="tabRotas" data-tab="rotas" onclick="mudarTab('rotas')">🗺️ Rotas</div>
+  <div class="tab" id="tabFrequencia" data-tab="frequencia" onclick="mudarTab('frequencia')">⏱️ Frequência de Visitas</div>
 </nav>
 
 <main id="mainContent"><div class="loading">Carregando…</div></main>
@@ -344,6 +345,7 @@ async function mudarTab(tab){
   else if (tab === 'painel') await renderPainel();
   else if (tab === 'vendasdia') await renderVendasDia();
   else if (tab === 'rotas') await renderRotas();
+  else if (tab === 'frequencia') await renderFrequencia();
 }
 
 // ===================== FREEZERS =====================
@@ -1569,6 +1571,86 @@ async function salvarRota(){
   fecharModal('modalRota');
   rtSubTab = 'salvas';
   await renderRotas();
+}
+
+// ===================== FREQUÊNCIA DE VISITAS =====================
+let freqPrazoIdeal = 15;
+
+async function renderFrequencia(){
+  $('mainContent').innerHTML = '<div class="loading">Carregando…</div>';
+
+  const [freezersR, configR, visitasR] = await Promise.all([
+    sb.from('freezers').select('id, ponto_venda, rede, cidade, status, repositor_nome').eq('status','ativo').order('ponto_venda'),
+    sb.from('freezer_config').select('valor_numero').eq('chave','prazo_ideal_visita_dias').single(),
+    sb.rpc('freezer_ultima_visita_por_cliente'),
+  ]);
+
+  if (freezersR.error){ $('mainContent').innerHTML = '<div class="empty">Erro: '+esc(freezersR.error.message)+'</div>'; return; }
+
+  freqPrazoIdeal = (configR.data && configR.data.valor_numero) ? Number(configR.data.valor_numero) : 15;
+
+  const ultimaPorFreezer = {};
+  (visitasR.data || []).forEach(v => { ultimaPorFreezer[v.freezer_id] = v.ultima_visita; });
+
+  const hoje = new Date();
+  const linhas = (freezersR.data || []).map(f => {
+    const ultima = ultimaPorFreezer[f.id] || null;
+    const dias = ultima ? Math.floor((hoje - new Date(ultima+'T12:00')) / 86400000) : null;
+    return Object.assign({}, f, { ultima, dias });
+  });
+
+  // Nunca visitado primeiro; depois do mais atrasado (mais dias sem visita) pro mais recente
+  linhas.sort((a,b) => {
+    const da = a.dias == null ? Infinity : a.dias;
+    const db = b.dias == null ? Infinity : b.dias;
+    return db - da;
+  });
+
+  const prazoVermelho = freqPrazoIdeal * 2;
+
+  $('mainContent').innerHTML =
+    '<div class="card">'+
+      '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">'+
+        '<h2 style="margin:0">Frequência de Visitas</h2>'+
+        '<div class="field" style="max-width:220px;margin:0">'+
+          '<label>Prazo ideal entre visitas (dias)</label>'+
+          '<input class="inp" type="number" min="1" max="15" step="1" id="freqPrazoInput" value="'+freqPrazoIdeal+'" '+(souBackoffice?'':'disabled title="Só master/backoffice pode alterar o prazo ideal"')+' onchange="salvarPrazoIdealFrequencia()">'+
+        '</div>'+
+      '</div>'+
+      '<p class="hint">Clientes ativos, ordenados do que está há mais tempo sem visita pro mais recente. '+
+        '🟡 acima de '+freqPrazoIdeal+' dias sem visita · 🔴 acima de '+prazoVermelho+' dias ou nunca visitado.'+
+        (souBackoffice ? ' O prazo ideal pode ser reduzido (nunca acima de 15 dias) — os alertas amarelo e vermelho se deslocam proporcionalmente (vermelho = 2× o prazo ideal).' : '')+
+      '</p>'+
+      '<div id="freqMsg" class="msg"></div>'+
+      (linhas.length ? '<div class="table-wrap"><table><thead><tr><th>Cliente</th><th>Cidade</th>'+(souBackoffice?'<th>Repositor</th>':'')+'<th>Última visita</th><th>Dias sem visita</th><th>Status</th></tr></thead><tbody>'+
+        linhas.map(f => {
+          let pill;
+          if (f.dias == null) pill = '<span class="flag-pill" style="background:#FDEDEC;color:#B43C3C">🔴 Nunca visitado</span>';
+          else if (f.dias > prazoVermelho) pill = '<span class="flag-pill" style="background:#FDEDEC;color:#B43C3C">🔴 '+f.dias+' dias</span>';
+          else if (f.dias > freqPrazoIdeal) pill = '<span class="flag-pill" style="background:#FDF3E3;color:#B8860B">🟡 '+f.dias+' dias</span>';
+          else pill = '<span class="flag-pill on">🟢 '+f.dias+' dias</span>';
+          return '<tr><td>'+esc(f.ponto_venda)+(f.rede?' — '+esc(f.rede):'')+'</td><td>'+esc(f.cidade||'—')+'</td>'+
+            (souBackoffice?'<td>'+esc(f.repositor_nome||'—')+'</td>':'')+
+            '<td>'+(f.ultima?fmtData(f.ultima):'—')+'</td>'+
+            '<td>'+(f.dias==null?'—':f.dias)+'</td>'+
+            '<td>'+pill+'</td></tr>';
+        }).join('')+
+      '</tbody></table></div>' : '<div class="empty">Nenhum freezer ativo encontrado.</div>')+
+    '</div>';
+}
+
+async function salvarPrazoIdealFrequencia(){
+  const input = $('freqPrazoInput');
+  const v = Number(input.value);
+  if (!v || isNaN(v) || v < 1){ showMsg('freqMsg','Informe um número de dias maior que zero.','err'); input.value = freqPrazoIdeal; return; }
+  if (v > 15){ showMsg('freqMsg','O prazo ideal não pode ser maior que 15 dias.','err'); input.value = freqPrazoIdeal; return; }
+
+  const { error } = await sb.from('freezer_config').update({ valor_numero: v, atualizado_por: meuPerfil.id }).eq('chave','prazo_ideal_visita_dias');
+  if (error){ showMsg('freqMsg','Erro ao salvar: '+error.message,'err'); input.value = freqPrazoIdeal; return; }
+
+  freqPrazoIdeal = v;
+  await renderFrequencia();
+  showMsg('freqMsg','Prazo ideal atualizado para '+v+' dia(s).','ok');
 }
 
 verificarAcessoEIniciar();
