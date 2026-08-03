@@ -287,6 +287,15 @@ let rtSubTab = 'salvas';
 let rtRepositoresCache = null;
 let rtRepositorSelecionado = null;
 let rotasSugeridasCache = null;
+let semanaRepositorAtual = null;
+let semanaClientesCache = [];
+let semanaSelecionados = new Set();
+let semanaDiasUteis = { seg:true, ter:true, qua:true, qui:true, sex:true };
+let semanaDataInicio = null;
+let semanaResultado = null;
+let semanaSemGeo = [];
+let semanaPrazoIdealCache = 15;
+let semanaCacheRepositorId = null;
 let mrParadas = [];
 let mrFreezersDisponiveis = [];
 
@@ -1329,12 +1338,14 @@ async function renderRotas(){
       '<div class="row" style="margin-top:14px;gap:8px">'+
         '<button class="btn'+(rtSubTab==='salvas'?'':'-outline')+' btn-sm" onclick="rtSubTab=\'salvas\';renderRotas()">💾 Minhas Rotas Salvas</button>'+
         '<button class="btn'+(rtSubTab==='auto'?'':'-outline')+' btn-sm" onclick="rtSubTab=\'auto\';renderRotas()">📍 Sugestão Automática</button>'+
+        '<button class="btn'+(rtSubTab==='semanal'?'':'-outline')+' btn-sm" onclick="rtSubTab=\'semanal\';renderRotas()">📅 Planejamento Semanal</button>'+
       '</div>'+
       '<div id="rtSubConteudo" style="margin-top:14px"><div class="loading">Carregando…</div></div>'+
     '</div>';
 
   if (rtSubTab === 'salvas') await carregarRotasSalvas();
-  else await carregarRotasSugestao();
+  else if (rtSubTab === 'auto') await carregarRotasSugestao();
+  else await carregarPlanejamentoSemanal();
 }
 
 async function carregarRotasSugestao(){
@@ -1398,6 +1409,208 @@ async function carregarRotas(){
     }).join('');
 }
 
+// ── Planejamento Semanal (integra Frequência de Visitas + Roteirização) ──
+
+function isoDateStr(d){
+  const y = d.getFullYear(), m = String(d.getMonth()+1).padStart(2,'0'), day = String(d.getDate()).padStart(2,'0');
+  return y+'-'+m+'-'+day;
+}
+
+function segundaDaSemana(base){
+  const d = new Date(base);
+  const dia = d.getDay(); // 0=Dom,1=Seg,...,6=Sáb
+  const diff = dia === 0 ? -6 : 1 - dia;
+  d.setDate(d.getDate() + diff);
+  return d;
+}
+
+const DIAS_UTEIS_DEFS = [ ['seg','Segunda'], ['ter','Terça'], ['qua','Quarta'], ['qui','Quinta'], ['sex','Sexta'] ];
+
+async function carregarPlanejamentoSemanal(){
+  const el = $('rtSubConteudo');
+  if (souBackoffice && !rtRepositoresCache){
+    const { data } = await sb.rpc('freezers_listar_repositores');
+    rtRepositoresCache = data || [];
+  }
+  if (!souBackoffice) semanaRepositorAtual = meuPerfil.id;
+  if (!semanaDataInicio) semanaDataInicio = isoDateStr(segundaDaSemana(new Date()));
+
+  el.innerHTML =
+    '<p class="hint">A lista vem ordenada dos clientes há mais tempo sem visita pro mais recente, com quem já passou do prazo ideal (aba Frequência de Visitas) pré-marcado. Ajuste a seleção como quiser, escolha os dias úteis disponíveis e gere a rota otimizada por dia.</p>'+
+    (souBackoffice ? '<div class="field" style="max-width:280px;margin-bottom:10px"><label>Repositor</label><select class="inp" id="semRepositor" onchange="mudarRepositorSemanal()">'+
+      '<option value="">— selecione —</option>'+
+      (rtRepositoresCache||[]).map(r => '<option value="'+r.id+'"'+(semanaRepositorAtual===r.id?' selected':'')+'>'+esc(r.nome)+'</option>').join('')+
+    '</select></div>' : '')+
+    '<div id="semConteudo">'+(souBackoffice && !semanaRepositorAtual ? '<div class="empty">Escolha um repositor.</div>' : '<div class="loading">Carregando…</div>')+'</div>';
+
+  if (semanaRepositorAtual){
+    if (semanaCacheRepositorId === semanaRepositorAtual && semanaClientesCache.length){
+      renderSemanal(); // já carregado antes — reaproveita seleção e resultado gerado, sem refazer a consulta
+    } else {
+      await buscarClientesSemanal();
+    }
+  }
+}
+
+async function mudarRepositorSemanal(){
+  semanaRepositorAtual = $('semRepositor').value || null;
+  semanaSelecionados = new Set();
+  semanaResultado = null;
+  if (semanaRepositorAtual) await buscarClientesSemanal();
+  else $('semConteudo').innerHTML = '<div class="empty">Escolha um repositor.</div>';
+}
+
+async function buscarClientesSemanal(){
+  $('semConteudo').innerHTML = '<div class="loading">Carregando…</div>';
+
+  const [freezersR, configR, visitasR] = await Promise.all([
+    sb.from('freezers').select('id, ponto_venda, rede, cidade, endereco, latitude, longitude, status, repositor_id').eq('status','ativo').eq('repositor_id', semanaRepositorAtual).order('ponto_venda'),
+    sb.from('freezer_config').select('valor_numero').eq('chave','prazo_ideal_visita_dias').single(),
+    sb.rpc('freezer_ultima_visita_por_cliente'),
+  ]);
+  if (freezersR.error){ $('semConteudo').innerHTML = '<div class="empty">Erro: '+esc(freezersR.error.message)+'</div>'; return; }
+
+  semanaPrazoIdealCache = (configR.data && configR.data.valor_numero) ? Number(configR.data.valor_numero) : 15;
+
+  const ultimaPorFreezer = {};
+  (visitasR.data || []).forEach(v => { ultimaPorFreezer[v.freezer_id] = v.ultima_visita; });
+
+  const hoje = new Date();
+  semanaClientesCache = (freezersR.data || []).map(f => {
+    const ultima = ultimaPorFreezer[f.id] || null;
+    const dias = ultima ? Math.floor((hoje - new Date(ultima+'T12:00')) / 86400000) : null;
+    return Object.assign({}, f, { ultima, dias });
+  }).sort((a,b) => {
+    const da = a.dias == null ? Infinity : a.dias;
+    const db = b.dias == null ? Infinity : b.dias;
+    return db - da;
+  });
+
+  // Pré-seleciona quem já passou do prazo ideal ou nunca foi visitado — ponto de partida editável.
+  semanaSelecionados = new Set(semanaClientesCache.filter(f => f.dias == null || f.dias > semanaPrazoIdealCache).map(f => f.id));
+  semanaResultado = null;
+  semanaCacheRepositorId = semanaRepositorAtual;
+
+  renderSemanal();
+}
+
+function renderSemanal(){
+  const el = $('semConteudo');
+  if (!semanaRepositorAtual){ el.innerHTML = '<div class="empty">Escolha um repositor.</div>'; return; }
+  if (!semanaClientesCache.length){ el.innerHTML = '<div class="empty">Nenhum freezer ativo pra esse repositor.</div>'; return; }
+
+  const prazoIdeal = semanaPrazoIdealCache;
+  const prazoVermelho = prazoIdeal * 2;
+
+  el.innerHTML =
+    '<div class="row" style="gap:16px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px">'+
+      '<div class="field" style="max-width:180px"><label>Semana de (segunda-feira)</label><input class="inp" type="date" id="semDataInicio" value="'+semanaDataInicio+'" onchange="mudarDataInicioSemanal()"></div>'+
+      '<div class="field" style="flex:1"><label>Dias úteis disponíveis</label><div style="display:flex;gap:12px;flex-wrap:wrap;padding-top:6px">'+
+        DIAS_UTEIS_DEFS.map(([chave,nome]) => '<label style="display:flex;align-items:center;gap:5px;font-size:.82rem;font-weight:400"><input type="checkbox" '+(semanaDiasUteis[chave]?'checked':'')+' onchange="semanaDiasUteis[\''+chave+'\']=this.checked"> '+nome+'</label>').join('')+
+      '</div></div>'+
+    '</div>'+
+    '<div class="table-wrap"><table><thead><tr><th style="width:34px"></th><th>Cliente</th><th>Cidade</th><th>Última visita</th><th>Dias sem visita</th><th>Status</th></tr></thead><tbody>'+
+      semanaClientesCache.map(f => {
+        let pill;
+        if (f.dias == null) pill = '<span class="flag-pill" style="background:#FDEDEC;color:#B43C3C">🔴 Nunca visitado</span>';
+        else if (f.dias > prazoVermelho) pill = '<span class="flag-pill" style="background:#FDEDEC;color:#B43C3C">🔴 '+f.dias+' dias</span>';
+        else if (f.dias > prazoIdeal) pill = '<span class="flag-pill" style="background:#FDF3E3;color:#B8860B">🟡 '+f.dias+' dias</span>';
+        else pill = '<span class="flag-pill on">🟢 '+f.dias+' dias</span>';
+        const semGeo = !f.latitude || !f.longitude;
+        return '<tr>'+
+          '<td><input type="checkbox" '+(semanaSelecionados.has(f.id)?'checked':'')+' onchange="toggleSelecaoSemanal(\''+f.id+'\',this.checked)"></td>'+
+          '<td>'+esc(f.ponto_venda)+(f.rede?' — '+esc(f.rede):'')+(semGeo?' <span style="color:#B43C3C;font-size:.7rem">(sem geolocalização — fica de fora da rota)</span>':'')+'</td>'+
+          '<td>'+esc(f.cidade||'—')+'</td>'+
+          '<td>'+(f.ultima?fmtData(f.ultima):'—')+'</td>'+
+          '<td>'+(f.dias==null?'—':f.dias)+'</td>'+
+          '<td>'+pill+'</td>'+
+        '</tr>';
+      }).join('')+
+    '</tbody></table></div>'+
+    '<div style="margin-top:14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">'+
+      '<button class="btn btn-sm" onclick="gerarRotaSemanal()">🗺️ Gerar rota otimizada da semana</button>'+
+      '<span class="hint" id="semContador" style="margin:0">'+semanaSelecionados.size+' cliente(s) selecionado(s)</span>'+
+    '</div>'+
+    '<div id="semResultado" style="margin-top:16px"></div>';
+
+  if (semanaResultado) renderResultadoSemanal();
+}
+
+function toggleSelecaoSemanal(id, marcado){
+  if (marcado) semanaSelecionados.add(id); else semanaSelecionados.delete(id);
+  const c = $('semContador');
+  if (c) c.textContent = semanaSelecionados.size+' cliente(s) selecionado(s)';
+}
+
+function mudarDataInicioSemanal(){
+  semanaDataInicio = $('semDataInicio').value;
+  semanaResultado = null;
+  const r = $('semResultado');
+  if (r) r.innerHTML = '';
+}
+
+function distribuirClientesPorDias(pontos, nDias){
+  if (!pontos.length || nDias < 1) return [];
+  const tamanhoAlvo = Math.max(1, Math.ceil(pontos.length / nDias));
+  let clusters = clusterizarFreezers(pontos, tamanhoAlvo);
+  while (clusters.length > nDias){
+    const extra = clusters.pop();
+    clusters[clusters.length-1] = clusters[clusters.length-1].concat(extra);
+  }
+  return clusters.map(c => ordenarRotaMaisProximo(c));
+}
+
+function gerarRotaSemanal(){
+  const diasAtivos = DIAS_UTEIS_DEFS.filter(([chave]) => semanaDiasUteis[chave]);
+  if (!diasAtivos.length){ alert('Marque pelo menos um dia útil pra distribuir as visitas.'); return; }
+
+  const selecionados = semanaClientesCache.filter(f => semanaSelecionados.has(f.id));
+  if (!selecionados.length){ alert('Selecione pelo menos um cliente pra gerar a rota.'); return; }
+
+  const comGeo = selecionados.filter(f => f.latitude && f.longitude);
+  semanaSemGeo = selecionados.filter(f => !f.latitude || !f.longitude);
+
+  const grupos = distribuirClientesPorDias(comGeo, diasAtivos.length);
+
+  semanaResultado = diasAtivos.map(([chave,nome], i) => {
+    const data = new Date(semanaDataInicio+'T12:00');
+    data.setDate(data.getDate()+i);
+    return { chave, nome: nome+'-feira', data: isoDateStr(data), paradas: grupos[i] || [] };
+  });
+
+  rotasSugeridasCache = semanaResultado.map(g => g.paradas);
+  rtRepositorSelecionado = semanaRepositorAtual; // reaproveita o modal de salvar rota já existente
+
+  renderResultadoSemanal();
+}
+
+function renderResultadoSemanal(){
+  const el = $('semResultado');
+  if (!semanaResultado){ el.innerHTML = ''; return; }
+
+  el.innerHTML =
+    (semanaSemGeo.length ? '<div class="msg show err" style="margin-bottom:12px">'+semanaSemGeo.length+' cliente(s) selecionado(s) sem geolocalização cadastrada, por isso ficaram de fora da rota: '+semanaSemGeo.map(f=>esc(f.ponto_venda)).join(', ')+'.</div>' : '')+
+    semanaResultado.map((g, i) => {
+      const nomeCompleto = g.nome+' — '+fmtData(g.data);
+      if (!g.paradas.length){
+        return '<div class="card" style="background:var(--creme)"><div class="fnome">'+nomeCompleto+'</div><p class="hint" style="margin:6px 0 0">Nenhuma parada nesse dia.</p></div>';
+      }
+      const km = distanciaTotalRota(g.paradas);
+      return '<div class="card" style="background:var(--creme)">'+
+        '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">'+
+          '<div class="fnome">'+nomeCompleto+' · '+g.paradas.length+' parada(s) · ~'+km.toFixed(0)+' km entre paradas</div>'+
+          '<div style="display:flex;gap:8px">'+
+            '<button class="btn-outline btn btn-sm" onclick="abrirModalRota(null, '+i+', \''+nomeCompleto+'\')">💾 Salvar como rota</button>'+
+            '<a class="btn btn-sm" href="'+linkGoogleMaps(g.paradas)+'" target="_blank">📍 Abrir no Google Maps</a>'+
+          '</div>'+
+        '</div>'+
+        '<ol style="margin:10px 0 0 20px;padding:0;font-size:.85rem">'+
+          g.paradas.map(p => '<li style="margin-bottom:6px"><b>'+esc(p.ponto_venda)+'</b>'+(p.rede?' — '+esc(p.rede):'')+'<br><span style="color:var(--text-light)">'+esc(p.endereco||'—')+'</span></li>').join('')+
+        '</ol>'+
+      '</div>';
+    }).join('');
+}
+
 async function carregarRotasSalvas(){
   const el = $('rtSubConteudo');
   el.innerHTML = '<div class="loading">Carregando…</div>';
@@ -1447,7 +1660,7 @@ async function excluirRota(id, nome){
 }
 
 // ── Modal de criar/editar rota ──────────────────────────
-async function abrirModalRota(rotaId, indiceSugestao){
+async function abrirModalRota(rotaId, indiceSugestao, nomeSugerido){
   $('mrMsg').className = 'msg';
   $('mrId').value = rotaId || '';
   $('mrTitulo').textContent = rotaId ? 'Editar Rota' : 'Nova Rota';
@@ -1473,6 +1686,7 @@ async function abrirModalRota(rotaId, indiceSugestao){
   } else if (indiceSugestao != null && rotasSugeridasCache && rotasSugeridasCache[indiceSugestao]){
     mrParadas = rotasSugeridasCache[indiceSugestao].slice();
     if (souBackoffice && rtRepositorSelecionado) $('mrRepositor').value = rtRepositorSelecionado;
+    if (nomeSugerido) $('mrNome').value = nomeSugerido;
   }
 
   await mrCarregarFreezersDisponiveis();
