@@ -726,12 +726,15 @@ async function renderNovaVisita(){
         '<div class="field" style="flex:2"><label>Freezer</label><select class="inp" id="nvFreezer">'+
           freezers.map(f => '<option value="'+f.id+'">'+esc(f.ponto_venda)+' — '+esc(f.codigo)+'</option>').join('')+
         '</select></div>'+
-        '<div class="field"><label>Data da visita</label><input class="inp" type="date" id="nvData" value="'+new Date().toISOString().slice(0,10)+'"></div>'+
+        '<div class="field"><label>Data</label><input class="inp" type="date" id="nvData" value="'+new Date().toISOString().slice(0,10)+'"></div>'+
       '</div>'+
-      '<label class="check-line"><input type="checkbox" id="nvHigienizacao"> Higienização realizada</label>'+
-      '<label class="check-line"><input type="checkbox" id="nvLimpeza"> Limpeza e arrumação (validades mais próximas na frente)</label>'+
-      '<label class="check-line" style="color:#B8860B"><input type="checkbox" id="nvFalhaLed"> ⚠️ Equipamento com falha no LED</label>'+
-      '<label class="check-line" style="color:#B43C3C"><input type="checkbox" id="nvRiscoFalha"> 🚨 Equipamento com risco de falha geral</label>'+
+      '<label class="check-line" style="background:var(--creme);padding:8px 10px;border-radius:8px"><input type="checkbox" id="nvSemVisita" onchange="alternarModoSemVisita()"> 🧾 Isto é uma venda sem visita física (ex: pedido por telefone) — não conta como visita pra frequência</label>'+
+      '<div id="nvBlocoVisita">'+
+        '<label class="check-line"><input type="checkbox" id="nvHigienizacao"> Higienização realizada</label>'+
+        '<label class="check-line"><input type="checkbox" id="nvLimpeza"> Limpeza e arrumação (validades mais próximas na frente)</label>'+
+        '<label class="check-line" style="color:#B8860B"><input type="checkbox" id="nvFalhaLed"> ⚠️ Equipamento com falha no LED</label>'+
+        '<label class="check-line" style="color:#B43C3C"><input type="checkbox" id="nvRiscoFalha"> 🚨 Equipamento com risco de falha geral</label>'+
+      '</div>'+
       '<div class="field" style="margin-bottom:14px"><label>Observações</label><textarea class="inp" id="nvObs" rows="2" placeholder="Ex: prateleira quebrada, cliente pediu sabor X..."></textarea></div>'+
 
       '<h2 style="font-size:1.05rem;margin-top:22px">Pedido tirado nesta visita</h2>'+
@@ -739,15 +742,29 @@ async function renderNovaVisita(){
       '<div id="itensVisitaLista"></div>'+
       '<button class="btn-outline btn btn-sm" onclick="adicionarItemVisita()">+ Adicionar item</button>'+
 
-      '<h2 style="font-size:1.05rem;margin-top:22px">Fotos da visita</h2>'+
-      '<input type="file" id="nvFotos" accept="image/*" multiple>'+
-      '<p class="hint" style="margin-top:6px">As fotos ficam disponíveis por 30 dias e depois são apagadas automaticamente.</p>'+
+      '<div id="nvBlocoFotos">'+
+        '<h2 style="font-size:1.05rem;margin-top:22px">Fotos da visita</h2>'+
+        '<input type="file" id="nvFotos" accept="image/*" multiple>'+
+        '<p class="hint" style="margin-top:6px">As fotos ficam disponíveis por 30 dias e depois são apagadas automaticamente.</p>'+
+      '</div>'+
 
       '<div class="modal-actions" style="margin-top:20px"><button class="btn" onclick="salvarVisita()" id="btnSalvarVisita">Salvar Visita</button></div>'+
       '<div class="msg" id="nvMsg"></div>'+
     '</div>';
 
   renderItensVisita();
+}
+
+function alternarModoSemVisita(){
+  const semVisita = $('nvSemVisita').checked;
+  $('nvBlocoVisita').style.display = semVisita ? 'none' : '';
+  $('nvBlocoFotos').style.display = semVisita ? 'none' : '';
+  if (semVisita){
+    $('nvHigienizacao').checked = false;
+    $('nvLimpeza').checked = false;
+    $('nvFalhaLed').checked = false;
+    $('nvRiscoFalha').checked = false;
+  }
 }
 
 function renderItensVisita(){
@@ -850,6 +867,9 @@ async function salvarVisita(){
   const itemSemProduto = itensVisitaAtual.some(it => !it.produto_id && !it.produto_avulso_id);
   if (itemSemProduto){ showMsg('nvMsg','Escolha um produto válido da lista (digite e selecione uma sugestão) pra cada item, ou remova a linha.','err'); return; }
 
+  const semVisita = $('nvSemVisita').checked;
+  if (semVisita && !itensVisitaAtual.length){ showMsg('nvMsg','Adicione pelo menos um item — venda sem visita precisa ter algo vendido.','err'); return; }
+
   const btn = $('btnSalvarVisita');
   btn.disabled = true; btn.textContent = 'Salvando…';
 
@@ -857,18 +877,19 @@ async function salvarVisita(){
     p_freezer_id: freezerId,
     p_repositor_nome: meuPerfil.nome,
     p_data_visita: $('nvData').value,
-    p_higienizacao: $('nvHigienizacao').checked,
-    p_limpeza_arrumacao: $('nvLimpeza').checked,
-    p_falha_led: $('nvFalhaLed').checked,
-    p_risco_falha_geral: $('nvRiscoFalha').checked,
+    p_higienizacao: semVisita ? false : $('nvHigienizacao').checked,
+    p_limpeza_arrumacao: semVisita ? false : $('nvLimpeza').checked,
+    p_falha_led: semVisita ? false : $('nvFalhaLed').checked,
+    p_risco_falha_geral: semVisita ? false : $('nvRiscoFalha').checked,
     p_observacoes: $('nvObs').value.trim() || null,
     p_itens: itensVisitaAtual.map(it => ({ produto_id: it.produto_id, produto_avulso_id: it.produto_avulso_id, produto_nome: it.produto_nome, quantidade: Number(it.quantidade), unidade: it.unidade })),
+    p_houve_visita: !semVisita,
   };
 
   const { data: visitaId, error } = await sb.rpc('registrar_visita_freezer', payload);
   if (error){ showMsg('nvMsg', 'Erro: '+error.message, 'err'); btn.disabled=false; btn.textContent='Salvar Visita'; return; }
 
-  const arquivos = $('nvFotos').files;
+  const arquivos = semVisita ? null : $('nvFotos').files;
   if (arquivos && arquivos.length){
     btn.textContent = 'Enviando fotos…';
     for (const file of arquivos){
@@ -878,7 +899,7 @@ async function salvarVisita(){
     }
   }
 
-  showMsg('nvMsg', 'Visita registrada com sucesso!', 'ok');
+  showMsg('nvMsg', semVisita ? 'Venda registrada com sucesso!' : 'Visita registrada com sucesso!', 'ok');
   btn.disabled = false; btn.textContent = 'Salvar Visita';
   setTimeout(() => mudarTab('visita'), 1200);
 }
@@ -931,11 +952,13 @@ async function carregarHistorico(){
           '</div>'+
         '</div>'+
         '<div class="visita-flags">'+
-          '<span class="flag-pill '+(v.higienizacao?'on':'')+'">'+(v.higienizacao?'✓':'—')+' Higienização</span>'+
-          '<span class="flag-pill '+(v.limpeza_arrumacao?'on':'')+'">'+(v.limpeza_arrumacao?'✓':'—')+' Limpeza/arrumação</span>'+
-          '<span class="flag-pill '+(v.pedido_tirado?'on':'')+'">'+(v.pedido_tirado?'✓':'—')+' Pedido tirado</span>'+
-          (v.falha_led ? '<span class="flag-pill" style="background:#FDF3E3;color:#B8860B">⚠️ Falha no LED</span>' : '')+
-          (v.risco_falha_geral ? '<span class="flag-pill" style="background:#FDEDEC;color:#B43C3C">🚨 Risco de falha geral</span>' : '')+
+          (v.houve_visita === false
+            ? '<span class="flag-pill" style="background:var(--creme);color:var(--bordo-dark);font-weight:600">🧾 Venda sem visita</span>'
+            : '<span class="flag-pill '+(v.higienizacao?'on':'')+'">'+(v.higienizacao?'✓':'—')+' Higienização</span>'+
+              '<span class="flag-pill '+(v.limpeza_arrumacao?'on':'')+'">'+(v.limpeza_arrumacao?'✓':'—')+' Limpeza/arrumação</span>'+
+              '<span class="flag-pill '+(v.pedido_tirado?'on':'')+'">'+(v.pedido_tirado?'✓':'—')+' Pedido tirado</span>'+
+              (v.falha_led ? '<span class="flag-pill" style="background:#FDF3E3;color:#B8860B">⚠️ Falha no LED</span>' : '')+
+              (v.risco_falha_geral ? '<span class="flag-pill" style="background:#FDEDEC;color:#B43C3C">🚨 Risco de falha geral</span>' : ''))+
         '</div>'+
         (v.observacoes ? '<p style="font-size:.8rem;margin-top:8px">'+esc(v.observacoes)+'</p>' : '')+
         (seusItens.length ? '<div class="table-wrap" style="margin-top:10px"><table><thead><tr><th>Produto</th><th>Qtd</th><th>Un.</th><th>Valor unit.</th><th>Total</th>'+(souBackoffice?'<th></th>':'')+'</tr></thead><tbody>'+
