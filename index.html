@@ -237,6 +237,32 @@
   </div>
 </div>
 
+<div class="modal-overlay" id="modalEfetivar">
+  <div class="modal" style="max-width:560px">
+    <h3>Efetivar Venda</h3>
+    <p class="hint" style="margin-bottom:12px">Informe as datas de vencimento — o número da NF pode ficar em branco por enquanto e ser preenchido depois no Recebíveis. Ao salvar, isso já entra automaticamente no controle de contas a receber.</p>
+    <input type="hidden" id="efVisitaId">
+    <div class="row">
+      <div class="field"><label>Número da NF (opcional por enquanto)</label><input class="inp" id="efNumeroNota" placeholder="Deixe em branco se ainda não tiver"></div>
+      <div class="field"><label>Forma de pagamento</label>
+        <select class="inp" id="efFormaPagamento">
+          <option>Boleto</option><option>PIX</option><option>Transferência</option><option>Cartão</option><option>Cheque</option><option>Dinheiro</option>
+        </select>
+      </div>
+    </div>
+    <p style="font-size:.85rem;margin:10px 0 4px"><strong>Total da venda: <span id="efValorTotal">R$ 0,00</span></strong></p>
+    <h4 style="font-size:.9rem;margin-top:14px;margin-bottom:6px">Parcelas / vencimentos</h4>
+    <div id="efParcelasLista"></div>
+    <button class="btn-outline btn btn-sm" onclick="adicionarParcelaEfetivar()">+ Adicionar parcela</button>
+    <p style="font-size:.8rem;margin-top:8px" id="efSomaParcelas"></p>
+    <div class="modal-actions" style="margin-top:16px">
+      <button class="btn-outline btn" onclick="fecharModal('modalEfetivar')">Cancelar</button>
+      <button class="btn" id="btnSalvarEfetivar" onclick="salvarEfetivacao()">Confirmar Venda</button>
+    </div>
+    <div class="msg" id="efMsg"></div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="modalRota">
   <div class="modal" style="max-width:640px">
     <h3 id="mrTitulo">Nova Rota</h3>
@@ -904,6 +930,85 @@ async function salvarVisita(){
   setTimeout(() => mudarTab('visita'), 1200);
 }
 
+let efParcelasAtual = [];
+let efValorTotalAtual = 0;
+
+async function abrirModalEfetivar(visitaId){
+  $('efMsg').className = 'msg';
+  $('efVisitaId').value = visitaId;
+  $('efNumeroNota').value = '';
+  $('efFormaPagamento').value = 'Boleto';
+
+  const { data: itens, error } = await sb.from('freezer_visita_itens').select('quantidade,valor_unitario').eq('visita_id', visitaId);
+  if (error){ alert('Erro ao carregar itens da venda: '+error.message); return; }
+  efValorTotalAtual = (itens||[]).reduce((s,it) => s + Number(it.quantidade)*Number(it.valor_unitario), 0);
+  $('efValorTotal').textContent = fmtMoeda(efValorTotalAtual);
+
+  efParcelasAtual = [{ valor: efValorTotalAtual.toFixed(2), vencimento: '' }];
+  renderParcelasEfetivar();
+  $('modalEfetivar').classList.add('show');
+}
+
+function renderParcelasEfetivar(){
+  const wrap = $('efParcelasLista');
+  wrap.innerHTML = efParcelasAtual.map((p, i) =>
+    '<div class="row" style="align-items:flex-end;margin-bottom:6px">'+
+      '<div class="field" style="max-width:160px"><label>Valor</label><input class="inp" type="number" step="0.01" min="0" value="'+p.valor+'" onchange="efParcelasAtual['+i+'].valor=this.value; atualizarSomaParcelas()"></div>'+
+      '<div class="field"><label>Vencimento</label><input class="inp" type="date" value="'+p.vencimento+'" onchange="efParcelasAtual['+i+'].vencimento=this.value"></div>'+
+      (efParcelasAtual.length>1 ? '<button class="btn-danger" onclick="removerParcelaEfetivar('+i+')">🗑️</button>' : '')+
+    '</div>'
+  ).join('');
+  atualizarSomaParcelas();
+}
+
+function adicionarParcelaEfetivar(){
+  efParcelasAtual.push({ valor:'0.00', vencimento:'' });
+  renderParcelasEfetivar();
+}
+function removerParcelaEfetivar(i){
+  efParcelasAtual.splice(i,1);
+  renderParcelasEfetivar();
+}
+function atualizarSomaParcelas(){
+  const soma = efParcelasAtual.reduce((s,p) => s + (Number(p.valor)||0), 0);
+  const dif = Math.abs(soma - efValorTotalAtual);
+  const el = $('efSomaParcelas');
+  if (dif > 0.01){
+    el.style.color = '#B43C3C';
+    el.textContent = 'Soma das parcelas ('+fmtMoeda(soma)+') não bate com o total da venda ('+fmtMoeda(efValorTotalAtual)+').';
+  } else {
+    el.style.color = '#2E7D32';
+    el.textContent = '✓ Soma das parcelas confere com o total da venda.';
+  }
+}
+
+async function salvarEfetivacao(){
+  const visitaId = $('efVisitaId').value;
+  const soma = efParcelasAtual.reduce((s,p) => s + (Number(p.valor)||0), 0);
+  if (Math.abs(soma - efValorTotalAtual) > 0.01){
+    showMsg('efMsg','A soma das parcelas precisa bater com o total da venda antes de confirmar.','err'); return;
+  }
+  if (efParcelasAtual.some(p => !p.vencimento)){
+    showMsg('efMsg','Preencha a data de vencimento de todas as parcelas.','err'); return;
+  }
+
+  const btn = $('btnSalvarEfetivar');
+  btn.disabled = true; btn.textContent = 'Salvando…';
+
+  const payload = {
+    p_visita_id: visitaId,
+    p_numero_nota: $('efNumeroNota').value.trim() || null,
+    p_forma_pagamento: $('efFormaPagamento').value,
+    p_parcelas: efParcelasAtual.map(p => ({ valor: Number(p.valor), vencimento: p.vencimento })),
+  };
+  const { error } = await sb.rpc('efetivar_venda_freezer', payload);
+  btn.disabled = false; btn.textContent = 'Confirmar Venda';
+  if (error){ showMsg('efMsg', 'Erro: '+error.message, 'err'); return; }
+
+  fecharModal('modalEfetivar');
+  await carregarHistorico();
+}
+
 // ===================== HISTÓRICO =====================
 
 async function renderHistorico(){
@@ -947,6 +1052,11 @@ async function carregarHistorico(){
             '<div style="font-size:.76rem;color:var(--text-light)">Repositor: '+esc(v.repositor_nome)+'</div>'+
           '</div>'+
           '<div style="display:flex;gap:6px">'+
+            (v.pedido_tirado ? (
+              v.status_venda === 'efetivada'
+                ? '<span class="flag-pill on" style="background:#E7F3E8;color:#2E7D32;font-weight:600">✅ Venda efetivada'+(v.numero_nota ? ' — NF '+esc(v.numero_nota) : ' — aguardando NF')+'</span>'
+                : '<button class="btn btn-sm" style="background:#B8860B" onclick="abrirModalEfetivar(\''+v.id+'\')">📝 Efetivar venda</button>'
+            ) : '')+
             '<button class="btn-outline btn btn-sm" onclick="verFotosVisita(\''+v.freezer_id+'\',\''+v.id+'\')">📷 Ver fotos</button>'+
             (souBackoffice ? '<button class="btn-outline btn btn-sm" style="color:#B43C3C;border-color:#E9B9A9" onclick="excluirVisita(\''+v.id+'\')" title="Excluir visita inteira (registrada por engano ou teste)">🗑 Excluir visita</button>' : '')+
           '</div>'+
