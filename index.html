@@ -477,10 +477,13 @@ function renderFreezersLista(){
   $('freezersListaWrap').innerHTML = lista;
 }
 
+let produtosSimplesCache = [];
+
 async function renderProdutosSimples(){
   const { data, error } = await sb.from('freezer_produtos_simples').select('*').order('categoria').order('nome');
   const el = $('produtosSimplesLista');
   if (error){ el.innerHTML = '<div class="empty">Erro: '+esc(error.message)+'</div>'; return; }
+  produtosSimplesCache = data || [];
   if (!data || !data.length){ el.innerHTML = '<div class="empty">Nenhum produto simples cadastrado ainda.</div>'; return; }
 
   el.innerHTML = '<div class="table-wrap"><table><thead><tr><th>Produto</th><th>Categoria</th><th>Código</th><th>Preço (R$)</th><th>Un/Caixa</th><th>Ativo</th><th></th></tr></thead><tbody>'+
@@ -492,7 +495,7 @@ async function renderProdutosSimples(){
         '<td><input class="inp" type="number" min="0" step="0.01" value="'+Number(p.preco||0).toFixed(2)+'" style="max-width:110px" onchange="salvarPrecoSimples(\''+p.id+'\',this.value)"></td>'+
         '<td><input class="inp" type="number" min="1" step="1" value="'+(p.unidades_por_caixa!=null?p.unidades_por_caixa:'')+'" placeholder="—" style="max-width:80px" onchange="salvarUnidadesPorCaixaSimples(\''+p.id+'\',this.value)"></td>'+
         '<td><input type="checkbox" '+(p.ativo?'checked':'')+' onchange="salvarAtivoSimples(\''+p.id+'\',this.checked)"></td>'+
-        '<td><button class="btn-danger" onclick="excluirProdutoSimples(\''+p.id+'\')">🗑️</button></td>'+
+        '<td style="white-space:nowrap"><button class="btn-outline btn btn-sm" onclick="abrirModalProdutoSimples(\''+p.id+'\')">Editar</button> <button class="btn-danger" onclick="excluirProdutoSimples(\''+p.id+'\')">🗑️</button></td>'+
       '</tr>'
     )).join('')+
     '</tbody></table></div>';
@@ -528,20 +531,23 @@ async function excluirProdutoSimples(id){
   await renderProdutosSimples();
 }
 
-function abrirModalProdutoSimples(){
+function abrirModalProdutoSimples(id){
   $('mpsMsg').className = 'msg';
-  $('mpsId').value = '';
-  $('mpsTitulo').textContent = 'Novo Produto (Preço Simples)';
-  $('mpsNome').value = '';
-  $('mpsCategoria').value = 'Picolé';
-  $('mpsCodigo').value = '';
-  $('mpsPreco').value = '0';
-  $('mpsMarca').value = 'Yeez';
-  $('mpsUnidadesPorCaixa').value = '';
+  const p = id ? produtosSimplesCache.find(x => x.id === id) : null;
+
+  $('mpsId').value = p ? p.id : '';
+  $('mpsTitulo').textContent = p ? 'Editar Produto (Preço Simples)' : 'Novo Produto (Preço Simples)';
+  $('mpsNome').value = p ? p.nome : '';
+  $('mpsCategoria').value = p ? p.categoria : 'Picolé';
+  $('mpsCodigo').value = p ? (p.codigo || '') : '';
+  $('mpsPreco').value = p ? Number(p.preco||0) : '0';
+  $('mpsMarca').value = p ? (p.marca || '') : 'Yeez';
+  $('mpsUnidadesPorCaixa').value = p && p.unidades_por_caixa != null ? p.unidades_por_caixa : '';
   $('modalProdutoSimples').classList.add('show');
 }
 
 async function salvarProdutoSimples(){
+  const id = $('mpsId').value || null;
   const nome = $('mpsNome').value.trim();
   const categoria = $('mpsCategoria').value;
   const codigo = $('mpsCodigo').value.trim() || null;
@@ -552,7 +558,10 @@ async function salvarProdutoSimples(){
   if (!nome){ showMsg('mpsMsg','Informe o nome do produto.','err'); return; }
   if (unidades_por_caixa !== null && (isNaN(unidades_por_caixa) || unidades_por_caixa <= 0)){ showMsg('mpsMsg','Un. por caixa deve ser um número maior que zero, ou deixe em branco.','err'); return; }
 
-  const { error } = await sb.from('freezer_produtos_simples').insert({ nome, categoria, codigo, preco, marca, unidades_por_caixa });
+  const dados = { nome, categoria, codigo, preco, marca, unidades_por_caixa };
+  const { error } = id
+    ? await sb.from('freezer_produtos_simples').update(dados).eq('id', id)
+    : await sb.from('freezer_produtos_simples').insert(dados);
   if (error){ showMsg('mpsMsg','Erro: '+error.message,'err'); return; }
 
   fecharModal('modalProdutoSimples');
@@ -1515,6 +1524,17 @@ function distanciaTotalRota(pontos){
   return total;
 }
 
+// Linha padrão de uma parada de rota: nome — rede, e embaixo código do cliente · cidade · endereço.
+function fmtParadaLinha(p){
+  const cod = p.codigo_cliente || p.codigo;
+  const partes = [];
+  if (cod) partes.push('Cód. '+esc(cod));
+  if (p.cidade) partes.push(esc(p.cidade));
+  partes.push(esc(p.endereco||'—'));
+  return '<b>'+esc(p.ponto_venda)+'</b>'+(p.rede?' — '+esc(p.rede):'')+
+    '<br><span style="color:var(--text-light)">'+partes.join(' · ')+'</span>';
+}
+
 function linkGoogleMaps(pontos){
   const coords = pontos.map(p => p.latitude+','+p.longitude);
   const destino = coords[coords.length-1];
@@ -1568,7 +1588,7 @@ async function carregarRotas(){
   const el = $('rtConteudo');
   const tamanhoAlvo = Number($('rtTamanho').value) || 7;
 
-  let query = sb.from('freezers').select('id, ponto_venda, rede, endereco, cidade, latitude, longitude, repositor_id').eq('status','ativo').not('latitude','is',null);
+  let query = sb.from('freezers').select('id, ponto_venda, rede, endereco, cidade, codigo, codigo_cliente, latitude, longitude, repositor_id').eq('status','ativo').not('latitude','is',null);
   const { data: todos, error } = await query;
   if (error){ el.innerHTML = '<div class="empty">Erro: '+esc(error.message)+'</div>'; return; }
 
@@ -1597,7 +1617,7 @@ async function carregarRotas(){
           '</div>'+
         '</div>'+
         '<ol style="margin:10px 0 0 20px;padding:0;font-size:.85rem">'+
-          rota.map(p => '<li style="margin-bottom:6px"><b>'+esc(p.ponto_venda)+'</b>'+(p.rede?' — '+esc(p.rede):'')+'<br><span style="color:var(--text-light)">'+esc(p.endereco||'—')+'</span></li>').join('')+
+          rota.map(p => '<li style="margin-bottom:6px">'+fmtParadaLinha(p)+'</li>').join('')+
         '</ol>'+
       '</div>';
     }).join('');
@@ -1658,7 +1678,7 @@ async function buscarClientesSemanal(){
   $('semConteudo').innerHTML = '<div class="loading">Carregando…</div>';
 
   const [freezersR, configR, visitasR] = await Promise.all([
-    sb.from('freezers').select('id, ponto_venda, rede, cidade, endereco, latitude, longitude, status, repositor_id').eq('status','ativo').eq('repositor_id', semanaRepositorAtual).order('ponto_venda'),
+    sb.from('freezers').select('id, ponto_venda, rede, cidade, endereco, codigo, codigo_cliente, latitude, longitude, status, repositor_id').eq('status','ativo').eq('repositor_id', semanaRepositorAtual).order('ponto_venda'),
     sb.from('freezer_config').select('valor_numero').eq('chave','prazo_ideal_visita_dias').single(),
     sb.rpc('freezer_ultima_visita_por_cliente'),
   ]);
@@ -1709,7 +1729,7 @@ function renderSemanal(){
       '<button class="btn-outline btn btn-sm" onclick="aplicarFiltroDiasSemanal()">Selecionar sem visita há X+ dias</button>'+
       '<span class="hint" style="margin:0">Substitui a seleção atual pelos clientes que batem com o filtro.</span>'+
     '</div>'+
-    '<div class="table-wrap"><table><thead><tr><th style="width:34px"><input type="checkbox" id="semSelecionarTodos" onchange="alternarSelecaoTodosSemanal(this.checked)"></th><th>Cliente</th><th>Cidade</th><th>Última visita</th><th>Dias sem visita</th><th>Status</th></tr></thead><tbody>'+
+    '<div class="table-wrap"><table><thead><tr><th style="width:34px"><input type="checkbox" id="semSelecionarTodos" onchange="alternarSelecaoTodosSemanal(this.checked)"></th><th>Cliente</th><th>Código</th><th>Cidade</th><th>Última visita</th><th>Dias sem visita</th><th>Status</th></tr></thead><tbody>'+
       semanaClientesCache.map(f => {
         let pill;
         if (f.dias == null) pill = '<span class="flag-pill" style="background:#FDEDEC;color:#B43C3C">🔴 Nunca visitado</span>';
@@ -1720,6 +1740,7 @@ function renderSemanal(){
         return '<tr>'+
           '<td><input type="checkbox" class="sem-check-cliente" data-freezer-id="'+f.id+'" '+(semanaSelecionados.has(f.id)?'checked':'')+' onchange="toggleSelecaoSemanal(\''+f.id+'\',this.checked)"></td>'+
           '<td>'+esc(f.ponto_venda)+(f.rede?' — '+esc(f.rede):'')+(semGeo?' <span style="color:#B43C3C;font-size:.7rem">(sem geolocalização — fica de fora da rota)</span>':'')+'</td>'+
+          '<td>'+esc(f.codigo_cliente || f.codigo || '—')+'</td>'+
           '<td>'+esc(f.cidade||'—')+'</td>'+
           '<td>'+(f.ultima?fmtData(f.ultima):'—')+'</td>'+
           '<td>'+(f.dias==null?'—':f.dias)+'</td>'+
@@ -1862,7 +1883,7 @@ function renderResultadoSemanal(){
           '</div>'+
         '</div>'+
         '<ol style="margin:10px 0 0 20px;padding:0;font-size:.85rem">'+
-          g.paradas.map(p => '<li style="margin-bottom:6px"><b>'+esc(p.ponto_venda)+'</b>'+(p.rede?' — '+esc(p.rede):'')+'<br><span style="color:var(--text-light)">'+esc(p.endereco||'—')+'</span></li>').join('')+
+          g.paradas.map(p => '<li style="margin-bottom:6px">'+fmtParadaLinha(p)+'</li>').join('')+
         '</ol>'+
       '</div>';
     }).join('');
@@ -1883,7 +1904,7 @@ async function carregarRotasSalvas(){
     rtRepositoresCache.forEach(r => { nomePorRepositor[r.id] = r.nome; });
   }
 
-  const { data: paradas } = await sb.from('freezer_rota_paradas').select('rota_id, ordem, freezers(id, ponto_venda, rede, endereco, latitude, longitude)').order('ordem');
+  const { data: paradas } = await sb.from('freezer_rota_paradas').select('rota_id, ordem, freezers(id, ponto_venda, rede, endereco, cidade, codigo, codigo_cliente, latitude, longitude)').order('ordem');
   const paradasPorRota = {};
   (paradas||[]).forEach(p => {
     if (!p.freezers) return; // freezer pode ter sido excluído
@@ -1903,7 +1924,7 @@ async function carregarRotasSalvas(){
         '</div>'+
       '</div>'+
       (pts.length
-        ? '<ol style="margin:10px 0 0 20px;padding:0;font-size:.85rem">'+pts.map(p => '<li style="margin-bottom:6px"><b>'+esc(p.ponto_venda)+'</b>'+(p.rede?' — '+esc(p.rede):'')+'<br><span style="color:var(--text-light)">'+esc(p.endereco||'—')+'</span></li>').join('')+'</ol>'
+        ? '<ol style="margin:10px 0 0 20px;padding:0;font-size:.85rem">'+pts.map(p => '<li style="margin-bottom:6px">'+fmtParadaLinha(p)+'</li>').join('')+'</ol>'
         : '<p class="hint" style="margin-top:8px">Nenhuma parada adicionada ainda — clique em Editar.</p>')+
     '</div>';
   }).join('');
@@ -1938,7 +1959,7 @@ async function abrirModalRota(rotaId, indiceSugestao, nomeSugerido){
     if (error){ alert('Erro ao carregar rota: '+error.message); return; }
     $('mrNome').value = rota.nome;
     if (souBackoffice) $('mrRepositor').value = rota.repositor_id || '';
-    const { data: paradas } = await sb.from('freezer_rota_paradas').select('ordem, freezers(id, ponto_venda, rede, endereco, latitude, longitude)').eq('rota_id', rotaId).order('ordem');
+    const { data: paradas } = await sb.from('freezer_rota_paradas').select('ordem, freezers(id, ponto_venda, rede, endereco, cidade, codigo, codigo_cliente, latitude, longitude)').eq('rota_id', rotaId).order('ordem');
     mrParadas = (paradas||[]).filter(p => p.freezers).map(p => p.freezers);
   } else if (indiceSugestao != null && rotasSugeridasCache && rotasSugeridasCache[indiceSugestao]){
     mrParadas = rotasSugeridasCache[indiceSugestao].slice();
@@ -1956,7 +1977,7 @@ async function mrCarregarFreezersDisponiveis(){
   const selectAdd = $('mrFreezerAdd');
   if (!repositorId){ mrFreezersDisponiveis = []; selectAdd.innerHTML = '<option value="">— escolha um repositor primeiro —</option>'; return; }
 
-  const { data, error } = await sb.from('freezers').select('id, ponto_venda, rede, endereco, latitude, longitude').eq('status','ativo').eq('repositor_id', repositorId).not('latitude','is',null).order('ponto_venda');
+  const { data, error } = await sb.from('freezers').select('id, ponto_venda, rede, endereco, cidade, codigo, codigo_cliente, latitude, longitude').eq('status','ativo').eq('repositor_id', repositorId).not('latitude','is',null).order('ponto_venda');
   if (error){ selectAdd.innerHTML = '<option value="">Erro ao carregar</option>'; return; }
   mrFreezersDisponiveis = data || [];
   mrAtualizarSelectAdd();
@@ -1967,7 +1988,7 @@ function mrAtualizarSelectAdd(){
   const idsNaRota = new Set(mrParadas.map(p => p.id));
   const disponiveis = mrFreezersDisponiveis.filter(f => !idsNaRota.has(f.id));
   selectAdd.innerHTML = '<option value="">— selecione —</option>'+
-    disponiveis.map(f => '<option value="'+f.id+'">'+esc(f.ponto_venda)+(f.rede?' — '+esc(f.rede):'')+'</option>').join('');
+    disponiveis.map(f => '<option value="'+f.id+'">'+(f.codigo_cliente||f.codigo?'['+esc(f.codigo_cliente||f.codigo)+'] ':'')+esc(f.ponto_venda)+(f.rede?' — '+esc(f.rede):'')+'</option>').join('');
 }
 
 function mrAdicionarParada(){
@@ -2006,7 +2027,7 @@ function mrRenderParadasLista(){
     mrParadas.map((p, i) => (
       '<li style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--creme-dark)">'+
         '<span style="font-weight:600;color:var(--text-light);min-width:22px">'+(i+1)+'.</span>'+
-        '<span style="flex:1;font-size:.88rem"><b>'+esc(p.ponto_venda)+'</b>'+(p.rede?' — '+esc(p.rede):'')+'<br><span style="color:var(--text-light);font-size:.8rem">'+esc(p.endereco||'—')+'</span></span>'+
+        '<span style="flex:1;font-size:.88rem">'+fmtParadaLinha(p)+'</span>'+
         '<button class="btn-outline btn btn-sm" style="padding:4px 8px" onclick="mrMoverParada('+i+',-1)" '+(i===0?'disabled':'')+'>▲</button>'+
         '<button class="btn-outline btn btn-sm" style="padding:4px 8px" onclick="mrMoverParada('+i+',1)" '+(i===mrParadas.length-1?'disabled':'')+'>▼</button>'+
         '<button class="btn-danger btn-sm" style="padding:4px 8px" onclick="mrRemoverParada('+i+')">🗑️</button>'+
