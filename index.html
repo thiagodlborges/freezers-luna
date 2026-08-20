@@ -157,6 +157,7 @@
   <div class="tab" id="tabVendasDia" data-tab="vendasdia" onclick="mudarTab('vendasdia')">🧾 Vendas do Dia</div>
   <div class="tab" id="tabRotas" data-tab="rotas" onclick="mudarTab('rotas')">🗺️ Rotas</div>
   <div class="tab" id="tabFrequencia" data-tab="frequencia" onclick="mudarTab('frequencia')">⏱️ Frequência de Visitas</div>
+  <div class="tab" id="tabLojaFab" data-tab="lojafab" onclick="mudarTab('lojafab')">🏪 Loja de Fábrica</div>
 </nav>
 
 <main id="mainContent"><div class="loading">Carregando…</div></main>
@@ -307,6 +308,25 @@
   </div>
 </div>
 
+<div class="modal-overlay" id="modalLfConfirmar">
+  <div class="modal" style="max-width:640px">
+    <h3>Revisar e Confirmar Contagem</h3>
+    <p class="hint">Pra cada item que faltou, separe quanto foi vendido (vira faturamento) e quanto foi perda/quebra (não fatura). A soma de vendido + perda precisa bater com a diferença contada. Itens que "sobraram" (contagem maior que o esperado) só ajustam o saldo, sem precisar de faturamento.</p>
+    <input type="hidden" id="lfcfContagemId">
+    <div id="lfcfItensLista"></div>
+    <p style="text-align:right;font-weight:600;margin-top:10px">Total a confirmar: <span id="lfcfTotal">R$ 0,00</span></p>
+    <div class="field" style="margin:12px 0"><label>Forma de recebimento</label>
+      <select class="inp" id="lfcfFormaPagamento"><option>PIX</option><option>Cartão</option><option>Dinheiro</option><option>Outro</option></select>
+    </div>
+    <div class="field" style="margin-bottom:12px"><label>Observações</label><textarea class="inp" id="lfcfObs" rows="2"></textarea></div>
+    <div class="modal-actions">
+      <button class="btn-outline btn" onclick="fecharModal('modalLfConfirmar')">Cancelar</button>
+      <button class="btn" id="btnLfConfirmar" onclick="lfSalvarConfirmacao()">Confirmar</button>
+    </div>
+    <div class="msg" id="lfcfMsg"></div>
+  </div>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
@@ -377,6 +397,7 @@ async function verificarAcessoEIniciar(){
     // Repositor puro: sem tela de cadastro de freezer, só a própria operação.
     $('tabFreezers').textContent = '🧊 Meus Freezers';
     $('tabPrecificacaoFreezers').style.display = 'none';
+    $('tabLojaFab').style.display = 'none';
     if (!souRepositor) {
       $('tabPainel').style.display = 'none';
       $('tabVendasDia').style.display = 'none';
@@ -408,6 +429,7 @@ async function mudarTab(tab){
   else if (tab === 'vendasdia') await renderVendasDia();
   else if (tab === 'rotas') await renderRotas();
   else if (tab === 'frequencia') await renderFrequencia();
+  else if (tab === 'lojafab') await renderLojaFab();
 }
 
 // ===================== FREEZERS =====================
@@ -2143,6 +2165,378 @@ async function salvarPrazoIdealFrequencia(){
   freqPrazoIdeal = v;
   await renderFrequencia();
   showMsg('freqMsg','Prazo ideal atualizado para '+v+' dia(s).','ok');
+}
+
+// ===================== LOJA DE FÁBRICA =====================
+let lfSubTab = 'contagem';
+let lfFreezersCache = null;
+let lfProdutosCache = null;
+let lfItensContagem = [];
+let lfItensAbastecimento = [];
+let lfConfirmItens = [];
+
+async function carregarFreezersLojaFab(){
+  if (lfFreezersCache) return lfFreezersCache;
+  const { data } = await sb.from('freezer_lojafab').select('*').eq('ativo', true).order('nome');
+  lfFreezersCache = data || [];
+  return lfFreezersCache;
+}
+
+async function carregarProdutosLojaFab(){
+  if (lfProdutosCache) return lfProdutosCache;
+  const [fabR, avulsoR] = await Promise.all([
+    sb.from('precificacao_produtos').select('id,nome,categoria').in('categoria', ['Picolés','Potes','Confeitaria']).eq('origem','fabrica').eq('ativo', true).order('nome'),
+    sb.from('freezer_produtos_simples').select('id,nome,categoria,preco').eq('ativo', true).order('nome'),
+  ]);
+  const fabIds = (fabR.data||[]).map(p => p.id);
+  const precoPorProdutoId = {};
+  if (fabIds.length){
+    const { data: precos } = await sb.from('precificacao_precos').select('produto_id, preco_venda, vigencia_inicio')
+      .in('produto_id', fabIds).eq('elo','loja_consumidor').eq('status','aprovado').lte('vigencia_inicio', new Date().toISOString().slice(0,10));
+    (precos||[]).forEach(p => {
+      const atual = precoPorProdutoId[p.produto_id];
+      if (!atual || p.vigencia_inicio > atual.vigencia_inicio) precoPorProdutoId[p.produto_id] = p;
+    });
+  }
+  const fab = (fabR.data || []).map(p => ({ produto_id: p.id, produto_avulso_id: null, nome: p.nome, rotulo: p.nome, preco_estimado: precoPorProdutoId[p.id] ? Number(precoPorProdutoId[p.id].preco_venda) : 0 }));
+  const avl = (avulsoR.data || []).map(p => ({ produto_id: null, produto_avulso_id: p.id, nome: p.nome, rotulo: p.nome+' (Yeez)', preco_estimado: Number(p.preco)||0 }));
+  lfProdutosCache = fab.concat(avl);
+  return lfProdutosCache;
+}
+
+function lfProdutoKey(p){ return p.produto_id ? 'p:'+p.produto_id : 'a:'+p.produto_avulso_id; }
+function lfMontarDropdownHTML(lista, onSelectExpr){
+  if (!lista.length) return '<div class="autocomplete-item autocomplete-empty">Nenhum produto encontrado.</div>';
+  return lista.map(p => '<div class="autocomplete-item" onmousedown="'+onSelectExpr(lfProdutosCache.indexOf(p))+'">'+esc(p.rotulo)+'</div>').join('');
+}
+
+async function renderLojaFab(){
+  $('mainContent').innerHTML = '<div class="loading">Carregando…</div>';
+  await Promise.all([carregarFreezersLojaFab(), carregarProdutosLojaFab()]);
+
+  $('mainContent').innerHTML =
+    '<div class="card">'+
+      '<h2 style="margin-bottom:6px">Loja de Fábrica</h2>'+
+      '<p class="hint">Controle de estoque e faturamento dos freezers de venda direta ao consumidor.</p>'+
+      '<div class="row" style="margin-bottom:0">'+
+        '<button class="btn'+(lfSubTab==='contagem'?'':' btn-outline')+' btn-sm" onclick="lfMudarSubTab(\'contagem\')">📋 Nova Contagem</button>'+
+        '<button class="btn'+(lfSubTab==='abastecer'?'':' btn-outline')+' btn-sm" onclick="lfMudarSubTab(\'abastecer\')">📦 Abastecimento</button>'+
+        '<button class="btn'+(lfSubTab==='historico'?'':' btn-outline')+' btn-sm" onclick="lfMudarSubTab(\'historico\')">🧾 Histórico e Propostas</button>'+
+      '</div>'+
+    '</div>'+
+    '<div id="lfConteudo"></div>';
+
+  if (!lfFreezersCache.length){
+    $('lfConteudo').innerHTML = '<div class="card"><div class="empty">Nenhum freezer da Loja de Fábrica cadastrado.</div></div>';
+    return;
+  }
+
+  if (lfSubTab === 'contagem') renderLfContagem();
+  else if (lfSubTab === 'abastecer') renderLfAbastecer();
+  else await renderLfHistorico();
+}
+
+function lfMudarSubTab(tab){ lfSubTab = tab; renderLojaFab(); }
+
+// ---- Nova Contagem ----
+function renderLfContagem(){
+  lfItensContagem = [];
+  $('lfConteudo').innerHTML =
+    '<div class="card">'+
+      '<div class="row">'+
+        '<div class="field" style="flex:2"><label>Freezer</label><select class="inp" id="lfcFreezer" onchange="lfCarregarEstoqueAtual()">'+
+          lfFreezersCache.map(f => '<option value="'+f.id+'">'+esc(f.nome)+'</option>').join('')+
+        '</select></div>'+
+        '<div class="field"><label>Data da contagem</label><input class="inp" type="date" id="lfcData" value="'+new Date().toISOString().slice(0,10)+'"></div>'+
+        '<div class="field" style="flex:2"><label>Responsável</label><input class="inp" id="lfcResponsavel" value="'+esc(meuPerfil.nome||'')+'"></div>'+
+      '</div>'+
+      '<p class="hint">Os itens já abastecidos aparecem automaticamente com a quantidade esperada. Informe a quantidade contada fisicamente em cada um — deixe em branco o que não for contado agora. Só adicione um item novo se for a primeira vez que esse produto entra nesse freezer.</p>'+
+      '<div id="lfcItensLista"></div>'+
+      '<button class="btn-outline btn btn-sm" onclick="lfAdicionarItemContagem()">+ Adicionar item novo</button>'+
+      '<div class="field" style="margin:14px 0"><label>Observações</label><textarea class="inp" id="lfcObs" rows="2"></textarea></div>'+
+      '<div class="modal-actions"><button class="btn" id="btnLfContagem" onclick="lfSalvarContagem()">Registrar Contagem</button></div>'+
+      '<div class="msg" id="lfcMsg"></div>'+
+    '</div>';
+  lfCarregarEstoqueAtual();
+}
+
+async function lfCarregarEstoqueAtual(){
+  const freezerId = $('lfcFreezer').value;
+  const { data, error } = await sb.from('freezer_lojafab_estoque').select('*').eq('freezer_id', freezerId).order('produto_nome');
+  if (error){ $('lfcItensLista').innerHTML = '<div class="empty">Erro: '+esc(error.message)+'</div>'; return; }
+  lfItensContagem = (data||[]).map(e => ({
+    produto_id: e.produto_id, produto_avulso_id: e.produto_avulso_id, produto_nome: e.produto_nome,
+    qtd_esperada: Number(e.qtd_teorica), quantidade_contada: '', _novo: false
+  }));
+  renderLfItensContagem();
+}
+
+function renderLfItensContagem(){
+  const wrap = $('lfcItensLista');
+  if (!lfItensContagem.length){ wrap.innerHTML = '<p class="hint">Nenhum item abastecido nesse freezer ainda — use "+ Adicionar item novo".</p>'; return; }
+  wrap.innerHTML = lfItensContagem.map((it,i) => {
+    if (it._novo){
+      return '<div class="item-row">'+
+        '<div class="field autocomplete-wrap"><label>Produto</label>'+
+          '<input class="inp" type="text" autocomplete="off" id="lfcProdInput'+i+'" value="'+esc(it.produto_nome||'')+'" placeholder="Digite pra buscar…" oninput="lfFiltrarProdutoDropdown('+i+',this.value)" onfocus="lfAbrirProdutoDropdown('+i+')">'+
+          '<div class="autocomplete-list" id="lfcProdDropdown'+i+'" style="display:none"></div>'+
+        '</div>'+
+        '<div class="field qtd"><label>Contada</label><input class="inp" type="number" min="0" step="0.01" value="'+it.quantidade_contada+'" onchange="lfItensContagem['+i+'].quantidade_contada=this.value"></div>'+
+        '<button class="btn-danger" onclick="lfRemoverItemContagem('+i+')">🗑️</button>'+
+      '</div>';
+    }
+    return '<div class="item-row">'+
+      '<div class="field" style="flex:2"><label>Produto</label><div style="padding:9px 0">'+esc(it.produto_nome)+'</div></div>'+
+      '<div class="field" style="max-width:110px"><label>Esperado</label><div style="padding:9px 0;color:var(--text-light)">'+it.qtd_esperada+'</div></div>'+
+      '<div class="field qtd"><label>Contada</label><input class="inp" type="number" min="0" step="0.01" value="'+it.quantidade_contada+'" onchange="lfItensContagem['+i+'].quantidade_contada=this.value"></div>'+
+    '</div>';
+  }).join('');
+}
+
+function lfAdicionarItemContagem(){ lfItensContagem.push({ produto_id:null, produto_avulso_id:null, produto_nome:'', qtd_esperada:0, quantidade_contada:'', _novo:true }); renderLfItensContagem(); }
+function lfRemoverItemContagem(i){ lfItensContagem.splice(i,1); renderLfItensContagem(); }
+
+function lfListaProdutosFiltrada(texto){
+  const t = (texto||'').trim().toLowerCase();
+  const jaExistentes = new Set(lfItensContagem.filter(it => it.produto_id || it.produto_avulso_id).map(lfProdutoKey));
+  const base = lfProdutosCache.filter(p => !jaExistentes.has(lfProdutoKey(p)));
+  if (!t) return base;
+  return base.filter(p => p.rotulo.toLowerCase().includes(t));
+}
+function lfAbrirProdutoDropdown(i){
+  fecharTodosDropdownsProduto();
+  const dropEl = $('lfcProdDropdown'+i), inputEl = $('lfcProdInput'+i);
+  if (!dropEl) return;
+  dropEl.innerHTML = lfMontarDropdownHTML(lfListaProdutosFiltrada(inputEl?inputEl.value:''), idx => 'lfSelecionarProdutoContagem('+i+','+idx+')');
+  dropEl.style.display = 'block';
+}
+function lfFiltrarProdutoDropdown(i, texto){
+  lfItensContagem[i].produto_nome = texto;
+  lfItensContagem[i].produto_id = null;
+  lfItensContagem[i].produto_avulso_id = null;
+  const dropEl = $('lfcProdDropdown'+i);
+  if (!dropEl) return;
+  dropEl.innerHTML = lfMontarDropdownHTML(lfListaProdutosFiltrada(texto), idx => 'lfSelecionarProdutoContagem('+i+','+idx+')');
+  dropEl.style.display = 'block';
+}
+function lfSelecionarProdutoContagem(i, idx){
+  const item = lfProdutosCache[idx];
+  if (!item) return;
+  lfItensContagem[i].produto_id = item.produto_id;
+  lfItensContagem[i].produto_avulso_id = item.produto_avulso_id;
+  lfItensContagem[i].produto_nome = item.nome;
+  fecharTodosDropdownsProduto();
+  renderLfItensContagem();
+}
+
+async function lfSalvarContagem(){
+  const freezerId = $('lfcFreezer').value;
+  const itensValidos = lfItensContagem.filter(it => it.quantidade_contada !== '' && it.quantidade_contada !== null && !isNaN(Number(it.quantidade_contada)) && (it.produto_id || it.produto_avulso_id));
+  if (!itensValidos.length){ showMsg('lfcMsg','Informe a quantidade contada de ao menos um item.','err'); return; }
+
+  const btn = $('btnLfContagem');
+  btn.disabled = true; btn.textContent = 'Salvando…';
+
+  const payload = {
+    p_freezer_id: freezerId,
+    p_data_contagem: $('lfcData').value,
+    p_responsavel_nome: $('lfcResponsavel').value.trim() || meuPerfil.nome,
+    p_observacoes: $('lfcObs').value.trim() || null,
+    p_itens: itensValidos.map(it => ({ produto_id: it.produto_id, produto_avulso_id: it.produto_avulso_id, produto_nome: it.produto_nome, quantidade_contada: Number(it.quantidade_contada) })),
+  };
+  const { error } = await sb.rpc('freezer_lojafab_registrar_contagem', payload);
+  btn.disabled = false; btn.textContent = 'Registrar Contagem';
+  if (error){ showMsg('lfcMsg','Erro: '+error.message,'err'); return; }
+
+  showMsg('lfcMsg','Contagem registrada! A proposta de faturamento está em "Histórico e Propostas".','ok');
+  setTimeout(() => { lfSubTab='historico'; renderLojaFab(); }, 1300);
+}
+
+// ---- Abastecimento ----
+function renderLfAbastecer(){
+  lfItensAbastecimento = [];
+  $('lfConteudo').innerHTML =
+    '<div class="card">'+
+      '<div class="row">'+
+        '<div class="field" style="flex:2"><label>Freezer</label><select class="inp" id="lfaFreezer">'+
+          lfFreezersCache.map(f => '<option value="'+f.id+'">'+esc(f.nome)+'</option>').join('')+
+        '</select></div>'+
+        '<div class="field"><label>Data</label><input class="inp" type="date" id="lfaData" value="'+new Date().toISOString().slice(0,10)+'"></div>'+
+        '<div class="field" style="flex:2"><label>Responsável</label><input class="inp" id="lfaResponsavel" value="'+esc(meuPerfil.nome||'')+'"></div>'+
+      '</div>'+
+      '<div id="lfaItensLista"></div>'+
+      '<button class="btn-outline btn btn-sm" onclick="lfAdicionarItemAbastecimento()">+ Adicionar item</button>'+
+      '<div class="field" style="margin:14px 0"><label>Observações</label><textarea class="inp" id="lfaObs" rows="2"></textarea></div>'+
+      '<div class="modal-actions"><button class="btn" id="btnLfAbastecer" onclick="lfSalvarAbastecimento()">Registrar Abastecimento</button></div>'+
+      '<div class="msg" id="lfaMsg"></div>'+
+    '</div>';
+  renderLfItensAbastecimento();
+}
+
+function renderLfItensAbastecimento(){
+  const wrap = $('lfaItensLista');
+  if (!lfItensAbastecimento.length){ wrap.innerHTML = '<p class="hint">Nenhum item adicionado ainda.</p>'; return; }
+  wrap.innerHTML = lfItensAbastecimento.map((it,i) =>
+    '<div class="item-row">'+
+      '<div class="field autocomplete-wrap"><label>Produto</label>'+
+        '<input class="inp" type="text" autocomplete="off" id="lfaProdInput'+i+'" value="'+esc(it.produto_nome||'')+'" placeholder="Digite pra buscar…" oninput="lfaFiltrarDropdown('+i+',this.value)" onfocus="lfaAbrirDropdown('+i+')">'+
+        '<div class="autocomplete-list" id="lfaProdDropdown'+i+'" style="display:none"></div>'+
+      '</div>'+
+      '<div class="field qtd"><label>Qtd</label><input class="inp" type="number" min="0.01" step="0.01" value="'+it.quantidade+'" onchange="lfItensAbastecimento['+i+'].quantidade=this.value"></div>'+
+      '<button class="btn-danger" onclick="lfRemoverItemAbastecimento('+i+')">🗑️</button>'+
+    '</div>'
+  ).join('');
+}
+function lfAdicionarItemAbastecimento(){ lfItensAbastecimento.push({ produto_id:null, produto_avulso_id:null, produto_nome:'', quantidade:1 }); renderLfItensAbastecimento(); }
+function lfRemoverItemAbastecimento(i){ lfItensAbastecimento.splice(i,1); renderLfItensAbastecimento(); }
+function lfaListaFiltrada(texto){
+  const t = (texto||'').trim().toLowerCase();
+  if (!t) return lfProdutosCache;
+  return lfProdutosCache.filter(p => p.rotulo.toLowerCase().includes(t));
+}
+function lfaAbrirDropdown(i){
+  fecharTodosDropdownsProduto();
+  const dropEl = $('lfaProdDropdown'+i), inputEl = $('lfaProdInput'+i);
+  if (!dropEl) return;
+  dropEl.innerHTML = lfMontarDropdownHTML(lfaListaFiltrada(inputEl?inputEl.value:''), idx => 'lfaSelecionarProduto('+i+','+idx+')');
+  dropEl.style.display = 'block';
+}
+function lfaFiltrarDropdown(i, texto){
+  lfItensAbastecimento[i].produto_nome = texto;
+  lfItensAbastecimento[i].produto_id = null;
+  lfItensAbastecimento[i].produto_avulso_id = null;
+  const dropEl = $('lfaProdDropdown'+i);
+  if (!dropEl) return;
+  dropEl.innerHTML = lfMontarDropdownHTML(lfaListaFiltrada(texto), idx => 'lfaSelecionarProduto('+i+','+idx+')');
+  dropEl.style.display = 'block';
+}
+function lfaSelecionarProduto(i, idx){
+  const item = lfProdutosCache[idx];
+  if (!item) return;
+  lfItensAbastecimento[i].produto_id = item.produto_id;
+  lfItensAbastecimento[i].produto_avulso_id = item.produto_avulso_id;
+  lfItensAbastecimento[i].produto_nome = item.nome;
+  fecharTodosDropdownsProduto();
+  renderLfItensAbastecimento();
+}
+
+async function lfSalvarAbastecimento(){
+  const freezerId = $('lfaFreezer').value;
+  if (!lfItensAbastecimento.length){ showMsg('lfaMsg','Adicione ao menos um item.','err'); return; }
+  const itemSemProduto = lfItensAbastecimento.some(it => !it.produto_id && !it.produto_avulso_id);
+  if (itemSemProduto){ showMsg('lfaMsg','Escolha um produto válido da lista pra cada item, ou remova a linha.','err'); return; }
+
+  const btn = $('btnLfAbastecer');
+  btn.disabled = true; btn.textContent = 'Salvando…';
+
+  const payload = {
+    p_freezer_id: freezerId,
+    p_data: $('lfaData').value,
+    p_responsavel_nome: $('lfaResponsavel').value.trim() || meuPerfil.nome,
+    p_observacoes: $('lfaObs').value.trim() || null,
+    p_itens: lfItensAbastecimento.map(it => ({ produto_id: it.produto_id, produto_avulso_id: it.produto_avulso_id, produto_nome: it.produto_nome, quantidade: Number(it.quantidade) })),
+  };
+  const { error } = await sb.rpc('freezer_lojafab_registrar_abastecimento', payload);
+  btn.disabled = false; btn.textContent = 'Registrar Abastecimento';
+  if (error){ showMsg('lfaMsg','Erro: '+error.message,'err'); return; }
+
+  showMsg('lfaMsg','Abastecimento registrado!','ok');
+  setTimeout(() => renderLfAbastecer(), 1000);
+}
+
+// ---- Histórico e Propostas ----
+async function renderLfHistorico(){
+  $('lfConteudo').innerHTML = '<div class="loading">Carregando…</div>';
+  const { data, error } = await sb.from('freezer_lojafab_contagens').select('*, freezer_lojafab(nome)').order('data_contagem',{ascending:false}).order('criado_em',{ascending:false}).limit(60);
+  if (error){ $('lfConteudo').innerHTML = '<div class="card"><div class="empty">Erro: '+esc(error.message)+'</div></div>'; return; }
+  if (!data || !data.length){ $('lfConteudo').innerHTML = '<div class="card"><div class="empty">Nenhuma contagem registrada ainda.</div></div>'; return; }
+
+  $('lfConteudo').innerHTML = '<div class="card">'+
+    data.map(c =>
+      '<div class="visita-item">'+
+        '<div class="visita-head">'+
+          '<div><strong>'+esc(c.freezer_lojafab ? c.freezer_lojafab.nome : '—')+'</strong> — '+fmtData(c.data_contagem)+
+            '<div style="font-size:.76rem;color:var(--text-light)">Responsável: '+esc(c.responsavel_nome||'—')+'</div></div>'+
+          (c.status === 'confirmada'
+            ? '<span class="flag-pill on" style="background:#E7F3E8;color:#2E7D32;font-weight:600">✅ Confirmada — '+fmtMoeda(c.valor_confirmado)+(c.forma_pagamento?' — '+esc(c.forma_pagamento):'')+'</span>'
+            : '<button class="btn btn-sm" style="background:#B8860B" onclick="lfAbrirModalConfirmar(\''+c.id+'\')">📝 Revisar e confirmar — proposta '+fmtMoeda(c.valor_proposto)+'</button>')+
+        '</div>'+
+        (c.observacoes ? '<div style="font-size:.8rem;color:var(--text-light);margin-top:4px">'+esc(c.observacoes)+'</div>' : '')+
+      '</div>'
+    ).join('')+
+  '</div>';
+}
+
+async function lfAbrirModalConfirmar(contagemId){
+  $('lfcfMsg').className = 'msg';
+  $('lfcfContagemId').value = contagemId;
+  $('lfcfObs').value = '';
+  $('lfcfFormaPagamento').value = 'PIX';
+
+  const { data: itens, error } = await sb.from('freezer_lojafab_contagem_itens').select('*').eq('contagem_id', contagemId).order('produto_nome');
+  if (error){ alert('Erro ao carregar itens: '+error.message); return; }
+
+  lfConfirmItens = (itens||[]).filter(it => Number(it.diferenca) !== 0).map(it => ({
+    id: it.id, produto_nome: it.produto_nome, diferenca: Number(it.diferenca),
+    preco_unit: Number(it.preco_unit), qtd_vendida: Number(it.qtd_vendida), qtd_perda: Number(it.qtd_perda), motivo_perda: it.motivo_perda || ''
+  }));
+  renderLfConfirmItens();
+  $('modalLfConfirmar').classList.add('show');
+}
+
+function renderLfConfirmItens(){
+  const wrap = $('lfcfItensLista');
+  if (!lfConfirmItens.length){
+    wrap.innerHTML = '<p class="hint">Nenhuma diferença nessa contagem — todos os itens bateram exatamente com o esperado.</p>';
+  } else {
+    wrap.innerHTML = lfConfirmItens.map((it,i) => {
+      if (it.diferenca < 0){
+        // Sobrou estoque em relação ao esperado — só ajusta o saldo, não fatura, não precisa de input.
+        return '<div style="border-top:1px solid var(--creme-dark);padding:10px 0">'+
+          '<div style="font-weight:600;font-size:.88rem">'+esc(it.produto_nome)+' <span style="font-weight:400;color:var(--text-light)">— sobrou '+Math.abs(it.diferenca)+' em relação ao esperado</span></div>'+
+          '<div style="color:var(--text-light);font-size:.76rem">Ajuste de estoque automático, sem impacto no faturamento.</div>'+
+        '</div>';
+      }
+      const soma = Number(it.qtd_vendida||0) + Number(it.qtd_perda||0);
+      const bate = Math.abs(soma - it.diferenca) < 0.001;
+      return '<div style="border-top:1px solid var(--creme-dark);padding:10px 0">'+
+        '<div style="font-weight:600;font-size:.88rem">'+esc(it.produto_nome)+' <span style="font-weight:400;color:var(--text-light)">— faltaram '+it.diferenca+'</span></div>'+
+        '<div class="row" style="margin:6px 0 4px">'+
+          '<div class="field" style="max-width:110px"><label>Vendido</label><input class="inp" type="number" min="0" step="0.01" value="'+it.qtd_vendida+'" onchange="lfConfirmItens['+i+'].qtd_vendida=this.value;renderLfConfirmItens()"></div>'+
+          '<div class="field" style="max-width:110px"><label>Perda/quebra</label><input class="inp" type="number" min="0" step="0.01" value="'+it.qtd_perda+'" onchange="lfConfirmItens['+i+'].qtd_perda=this.value;renderLfConfirmItens()"></div>'+
+          (Number(it.qtd_perda)>0 ? '<div class="field" style="flex:1"><label>Motivo da perda</label><input class="inp" type="text" value="'+esc(it.motivo_perda||'')+'" onchange="lfConfirmItens['+i+'].motivo_perda=this.value" placeholder="Ex: validade vencida, derreteu..."></div>' : '')+
+        '</div>'+
+        (!bate
+          ? '<div style="color:#B43C3C;font-size:.76rem">Vendido + perda ('+soma+') precisa bater com o que faltou ('+it.diferenca+').</div>'
+          : '<div style="color:#27AE60;font-size:.76rem">✓ Confere · '+fmtMoeda(Number(it.qtd_vendida)*it.preco_unit)+'</div>')+
+      '</div>';
+    }).join('');
+  }
+  const total = lfConfirmItens.reduce((s,it) => s + Number(it.qtd_vendida||0)*it.preco_unit, 0);
+  $('lfcfTotal').textContent = fmtMoeda(total);
+}
+
+async function lfSalvarConfirmacao(){
+  const naoBate = lfConfirmItens.some(it => it.diferenca > 0 && Math.abs((Number(it.qtd_vendida||0)+Number(it.qtd_perda||0)) - it.diferenca) > 0.001);
+  if (naoBate){ showMsg('lfcfMsg','Ajuste os itens em vermelho — vendido + perda precisa bater com o que faltou.','err'); return; }
+  const semMotivo = lfConfirmItens.some(it => Number(it.qtd_perda)>0 && !it.motivo_perda.trim());
+  if (semMotivo){ showMsg('lfcfMsg','Informe o motivo da perda pros itens com perda/quebra.','err'); return; }
+
+  const btn = $('btnLfConfirmar');
+  btn.disabled = true; btn.textContent = 'Salvando…';
+
+  const payload = {
+    p_contagem_id: $('lfcfContagemId').value,
+    p_forma_pagamento: $('lfcfFormaPagamento').value,
+    p_observacoes: $('lfcfObs').value.trim() || null,
+    p_itens: lfConfirmItens.map(it => ({ item_id: it.id, qtd_vendida: Number(it.qtd_vendida)||0, qtd_perda: Number(it.qtd_perda)||0, motivo_perda: it.motivo_perda||null })),
+  };
+  const { error } = await sb.rpc('freezer_lojafab_confirmar_contagem', payload);
+  btn.disabled = false; btn.textContent = 'Confirmar';
+  if (error){ showMsg('lfcfMsg','Erro: '+error.message,'err'); return; }
+
+  fecharModal('modalLfConfirmar');
+  await renderLfHistorico();
 }
 
 verificarAcessoEIniciar();
