@@ -2218,6 +2218,15 @@ async function renderLojaFab(){
     '<div class="card">'+
       '<h2 style="margin-bottom:6px">Loja de Fábrica</h2>'+
       '<p class="hint">Controle de estoque e faturamento dos freezers de venda direta ao consumidor.</p>'+
+      '<div style="margin-bottom:14px">'+
+        lfFreezersCache.map(f =>
+          '<div class="row" style="align-items:center;margin-bottom:6px">'+
+            '<input class="inp" style="max-width:280px" id="lfNome_'+f.id+'" value="'+esc(f.nome)+'">'+
+            '<button class="btn-outline btn btn-sm" onclick="lfSalvarNomeFreezer(\''+f.id+'\')">Salvar nome</button>'+
+          '</div>'
+        ).join('')+
+        '<div class="msg" id="lfNomeMsg"></div>'+
+      '</div>'+
       '<div class="row" style="margin-bottom:0">'+
         '<button class="btn'+(lfSubTab==='contagem'?'':' btn-outline')+' btn-sm" onclick="lfMudarSubTab(\'contagem\')">📋 Nova Contagem</button>'+
         '<button class="btn'+(lfSubTab==='abastecer'?'':' btn-outline')+' btn-sm" onclick="lfMudarSubTab(\'abastecer\')">📦 Abastecimento</button>'+
@@ -2234,6 +2243,16 @@ async function renderLojaFab(){
   if (lfSubTab === 'contagem') renderLfContagem();
   else if (lfSubTab === 'abastecer') renderLfAbastecer();
   else await renderLfHistorico();
+}
+
+async function lfSalvarNomeFreezer(freezerId){
+  const novoNome = $('lfNome_'+freezerId).value.trim();
+  if (!novoNome){ showMsg('lfNomeMsg','O nome não pode ficar em branco.','err'); return; }
+  const { error } = await sb.from('freezer_lojafab').update({ nome: novoNome }).eq('id', freezerId);
+  if (error){ showMsg('lfNomeMsg','Erro: '+error.message,'err'); return; }
+  lfFreezersCache = null; // força recarregar do banco em todo lugar (seletores de contagem/abastecimento também)
+  await renderLojaFab();
+  showMsg('lfNomeMsg','Nome atualizado!','ok');
 }
 
 function lfMudarSubTab(tab){ lfSubTab = tab; renderLojaFab(); }
