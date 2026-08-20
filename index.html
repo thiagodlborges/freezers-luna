@@ -333,6 +333,7 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 const SUPABASE_URL = 'https://pbuhwpcpdcnaheaywmdv.supabase.co';
@@ -402,11 +403,13 @@ async function verificarAcessoEIniciar(){
     // Repositor puro: sem tela de cadastro de freezer, só a própria operação.
     $('tabFreezers').textContent = '🧊 Meus Freezers';
     $('tabPrecificacaoFreezers').style.display = 'none';
-    $('tabLojaFab').style.display = 'none';
     if (!souRepositor) {
       $('tabPainel').style.display = 'none';
       $('tabVendasDia').style.display = 'none';
+      $('tabLojaFab').style.display = 'none'; // sem nenhum dos dois papéis, sem acesso
     }
+    // souRepositor puro mantém acesso a "Loja de Fábrica" — só pra registrar contagem/abastecimento.
+    // A conciliação bancária (Histórico e Propostas) fica restrita a backoffice/master dentro da própria tela.
   }
 
   $('carregandoOverlay').style.display = 'none';
@@ -2221,23 +2224,32 @@ async function renderLojaFab(){
   $('mainContent').innerHTML = '<div class="loading">Carregando…</div>';
   await Promise.all([carregarFreezersLojaFab(), carregarProdutosLojaFab()]);
 
+  if (!souBackoffice && lfSubTab === 'historico') lfSubTab = 'contagem'; // repositor não vê conciliação
+
   $('mainContent').innerHTML =
     '<div class="card">'+
       '<h2 style="margin-bottom:6px">Loja de Fábrica</h2>'+
-      '<p class="hint">Controle de estoque e faturamento dos freezers de venda direta ao consumidor.</p>'+
-      '<div style="margin-bottom:14px">'+
-        lfFreezersCache.map(f =>
-          '<div class="row" style="align-items:center;margin-bottom:6px">'+
-            '<input class="inp" style="max-width:280px" id="lfNome_'+f.id+'" value="'+esc(f.nome)+'">'+
-            '<button class="btn-outline btn btn-sm" onclick="lfSalvarNomeFreezer(\''+f.id+'\')">Salvar nome</button>'+
-          '</div>'
-        ).join('')+
-        '<div class="msg" id="lfNomeMsg"></div>'+
-      '</div>'+
-      '<div class="row" style="margin-bottom:0">'+
-        '<button class="btn'+(lfSubTab==='contagem'?'':' btn-outline')+' btn-sm" onclick="lfMudarSubTab(\'contagem\')">📋 Nova Contagem</button>'+
-        '<button class="btn'+(lfSubTab==='abastecer'?'':' btn-outline')+' btn-sm" onclick="lfMudarSubTab(\'abastecer\')">📦 Abastecimento</button>'+
-        '<button class="btn'+(lfSubTab==='historico'?'':' btn-outline')+' btn-sm" onclick="lfMudarSubTab(\'historico\')">🧾 Histórico e Propostas</button>'+
+      '<p class="hint">Controle de estoque e faturamento dos freezers de venda direta ao consumidor.'+
+        (!souBackoffice ? ' Registre aqui a contagem e o abastecimento — a conciliação com o banco é feita pelo administrativo depois.' : '')+
+      '</p>'+
+      (souBackoffice ? (
+        '<div style="margin-bottom:14px">'+
+          lfFreezersCache.map(f =>
+            '<div class="row" style="align-items:center;margin-bottom:6px">'+
+              '<input class="inp" style="max-width:280px" id="lfNome_'+f.id+'" value="'+esc(f.nome)+'">'+
+              '<button class="btn-outline btn btn-sm" onclick="lfSalvarNomeFreezer(\''+f.id+'\')">Salvar nome</button>'+
+            '</div>'
+          ).join('')+
+          '<div class="msg" id="lfNomeMsg"></div>'+
+        '</div>'
+      ) : '')+
+      '<div class="row" style="margin-bottom:0;justify-content:space-between">'+
+        '<div class="row" style="margin-bottom:0">'+
+          '<button class="btn'+(lfSubTab==='contagem'?'':' btn-outline')+' btn-sm" onclick="lfMudarSubTab(\'contagem\')">📋 Nova Contagem</button>'+
+          '<button class="btn'+(lfSubTab==='abastecer'?'':' btn-outline')+' btn-sm" onclick="lfMudarSubTab(\'abastecer\')">📦 Abastecimento</button>'+
+          (souBackoffice ? '<button class="btn'+(lfSubTab==='historico'?'':' btn-outline')+' btn-sm" onclick="lfMudarSubTab(\'historico\')">🧾 Histórico e Propostas</button>' : '')+
+        '</div>'+
+        (souBackoffice ? '<button class="btn-outline btn btn-sm" onclick="lfExportarExcel()">📊 Exportar Excel (recebíveis e perdas)</button>' : '')+
       '</div>'+
     '</div>'+
     '<div id="lfConteudo"></div>';
@@ -2249,7 +2261,53 @@ async function renderLojaFab(){
 
   if (lfSubTab === 'contagem') renderLfContagem();
   else if (lfSubTab === 'abastecer') renderLfAbastecer();
-  else await renderLfHistorico();
+  else if (souBackoffice) await renderLfHistorico();
+}
+
+async function lfExportarExcel(){
+  const { data: contagens, error } = await sb.from('freezer_lojafab_contagens')
+    .select('*, freezer_lojafab(nome)').eq('status','confirmada').order('data_contagem',{ascending:false});
+  if (error){ alert('Erro ao buscar dados: '+error.message); return; }
+  if (!contagens || !contagens.length){ alert('Nenhuma contagem confirmada pra exportar ainda.'); return; }
+
+  const idsContagens = contagens.map(c => c.id);
+  const { data: itens, error: errItens } = await sb.from('freezer_lojafab_contagem_itens').select('*').in('contagem_id', idsContagens);
+  if (errItens){ alert('Erro ao buscar itens: '+errItens.message); return; }
+  const itensPorContagem = {};
+  (itens||[]).forEach(it => { (itensPorContagem[it.contagem_id] = itensPorContagem[it.contagem_id]||[]).push(it); });
+
+  // Aba 1: lançamentos em Recebíveis (um por contagem confirmada)
+  const aoaLancamentos = [['Freezer','Data da contagem','Responsável','Valor lançado (esperado)','Valor conciliado (recebido)','Perda por inadimplência','Forma de pagamento','Confirmado por','Confirmado em']];
+  contagens.forEach(c => aoaLancamentos.push([
+    c.freezer_lojafab ? c.freezer_lojafab.nome : '—', fmtData(c.data_contagem), c.responsavel_nome||'—',
+    Number(c.valor_confirmado||0), Number(c.valor_conciliado||0), Number(c.valor_perda_inadimplencia||0),
+    c.forma_pagamento||'—', c.confirmado_por_nome||'—', c.confirmado_em ? fmtDataHora(c.confirmado_em) : '—'
+  ]));
+  const totalLancado = contagens.reduce((s,c)=>s+Number(c.valor_confirmado||0),0);
+  const totalConciliado = contagens.reduce((s,c)=>s+Number(c.valor_conciliado||0),0);
+  const totalInadimplencia = contagens.reduce((s,c)=>s+Number(c.valor_perda_inadimplencia||0),0);
+  aoaLancamentos.push(['TOTAL','','', totalLancado, totalConciliado, totalInadimplencia, '', '', '']);
+
+  // Aba 2: perdas de produto (quebra/vencimento) item a item
+  const aoaPerdas = [['Freezer','Data da contagem','Produto','Qtd perdida','Motivo','Valor que deixou de faturar']];
+  let totalUnidadesPerdidas = 0, totalValorPerdaProduto = 0;
+  contagens.forEach(c => {
+    (itensPorContagem[c.id]||[]).filter(it => Number(it.qtd_perda) > 0).forEach(it => {
+      const valorPerdido = Number(it.qtd_perda) * Number(it.preco_unit);
+      totalUnidadesPerdidas += Number(it.qtd_perda);
+      totalValorPerdaProduto += valorPerdido;
+      aoaPerdas.push([c.freezer_lojafab?c.freezer_lojafab.nome:'—', fmtData(c.data_contagem), it.produto_nome, Number(it.qtd_perda), it.motivo_perda||'—', valorPerdido]);
+    });
+  });
+  aoaPerdas.push(['TOTAL','','', totalUnidadesPerdidas, '', totalValorPerdaProduto]);
+
+  const wb = XLSX.utils.book_new();
+  const ws1 = XLSX.utils.aoa_to_sheet(aoaLancamentos); ws1['!cols'] = Array(9).fill({wch:22});
+  XLSX.utils.book_append_sheet(wb, ws1, 'Lançamentos Recebíveis');
+  const ws2 = XLSX.utils.aoa_to_sheet(aoaPerdas); ws2['!cols'] = Array(6).fill({wch:22});
+  XLSX.utils.book_append_sheet(wb, ws2, 'Perdas de Produto');
+
+  XLSX.writeFile(wb, 'loja_fabrica_recebiveis_perdas_'+new Date().toISOString().slice(0,10)+'.xlsx');
 }
 
 async function lfSalvarNomeFreezer(freezerId){
@@ -2262,7 +2320,7 @@ async function lfSalvarNomeFreezer(freezerId){
   showMsg('lfNomeMsg','Nome atualizado!','ok');
 }
 
-function lfMudarSubTab(tab){ lfSubTab = tab; renderLojaFab(); }
+function lfMudarSubTab(tab){ if (tab === 'historico' && !souBackoffice) return; lfSubTab = tab; renderLojaFab(); }
 
 // ---- Nova Contagem ----
 function renderLfContagem(){
@@ -2347,14 +2405,14 @@ function renderLfItensContagem(){
           '<input class="inp" type="text" autocomplete="off" id="lfcProdInput'+i+'" value="'+esc(it.produto_nome||'')+'" placeholder="Digite pra buscar…" oninput="lfFiltrarProdutoDropdown('+i+',this.value)" onfocus="lfAbrirProdutoDropdown('+i+')">'+
           '<div class="autocomplete-list" id="lfcProdDropdown'+i+'" style="display:none"></div>'+
         '</div>'+
-        '<div class="field qtd"><label>Contada</label><input class="inp" type="number" min="0" step="0.01" value="'+it.quantidade_contada+'" onchange="lfItensContagem['+i+'].quantidade_contada=this.value"></div>'+
+        '<div class="field qtd"><label>Contada</label><input class="inp" type="number" min="0" step="1" value="'+it.quantidade_contada+'" onchange="lfItensContagem['+i+'].quantidade_contada=this.value"></div>'+
         '<button class="btn-danger" onclick="lfRemoverItemContagem('+i+')">🗑️</button>'+
       '</div>';
     }
     return '<div class="item-row">'+
       '<div class="field" style="flex:2"><label>Produto</label><div style="padding:9px 0">'+esc(it.produto_nome)+'</div></div>'+
       '<div class="field" style="max-width:110px"><label>Esperado</label><div style="padding:9px 0;color:var(--text-light)">'+it.qtd_esperada+'</div></div>'+
-      '<div class="field qtd"><label>Contada</label><input class="inp" type="number" min="0" step="0.01" value="'+it.quantidade_contada+'" onchange="lfItensContagem['+i+'].quantidade_contada=this.value"></div>'+
+      '<div class="field qtd"><label>Contada</label><input class="inp" type="number" min="0" step="1" value="'+it.quantidade_contada+'" onchange="lfItensContagem['+i+'].quantidade_contada=this.value"></div>'+
     '</div>';
   }).join('');
 }
@@ -2399,6 +2457,8 @@ async function lfSalvarContagem(){
   const freezerId = $('lfcFreezer').value;
   const itensValidos = lfItensContagem.filter(it => it.quantidade_contada !== '' && it.quantidade_contada !== null && !isNaN(Number(it.quantidade_contada)) && (it.produto_id || it.produto_avulso_id));
   if (!itensValidos.length){ showMsg('lfcMsg','Informe a quantidade contada de ao menos um item.','err'); return; }
+  const naoInteiro = itensValidos.some(it => !Number.isInteger(Number(it.quantidade_contada)));
+  if (naoInteiro){ showMsg('lfcMsg','A contagem é sempre em unidades inteiras — não existe meio picolé/pote. Corrija os valores quebrados.','err'); return; }
 
   const btn = $('btnLfContagem');
   const editando = !!lfEditandoContagemId;
@@ -2509,7 +2569,7 @@ function renderLfItensAbastecimento(){
         '<input class="inp" type="text" autocomplete="off" id="lfaProdInput'+i+'" value="'+esc(it.produto_nome||'')+'" placeholder="Digite pra buscar…" oninput="lfaFiltrarDropdown('+i+',this.value)" onfocus="lfaAbrirDropdown('+i+')">'+
         '<div class="autocomplete-list" id="lfaProdDropdown'+i+'" style="display:none"></div>'+
       '</div>'+
-      '<div class="field qtd"><label>Qtd</label><input class="inp" type="number" min="0.01" step="0.01" value="'+it.quantidade+'" onchange="lfItensAbastecimento['+i+'].quantidade=this.value"></div>'+
+      '<div class="field qtd"><label>Qtd</label><input class="inp" type="number" min="1" step="1" value="'+it.quantidade+'" onchange="lfItensAbastecimento['+i+'].quantidade=this.value"></div>'+
       '<button class="btn-danger" onclick="lfRemoverItemAbastecimento('+i+')">🗑️</button>'+
     '</div>'
   ).join('');
@@ -2552,6 +2612,8 @@ async function lfSalvarAbastecimento(){
   if (!lfItensAbastecimento.length){ showMsg('lfaMsg','Adicione ao menos um item.','err'); return; }
   const itemSemProduto = lfItensAbastecimento.some(it => !it.produto_id && !it.produto_avulso_id);
   if (itemSemProduto){ showMsg('lfaMsg','Escolha um produto válido da lista pra cada item, ou remova a linha.','err'); return; }
+  const naoInteiro = lfItensAbastecimento.some(it => !Number.isInteger(Number(it.quantidade)));
+  if (naoInteiro){ showMsg('lfaMsg','A quantidade é sempre em unidades inteiras — não existe meio picolé/pote. Corrija os valores quebrados.','err'); return; }
 
   const btn = $('btnLfAbastecer');
   const editando = !!lfEditandoAbastecimentoId;
@@ -2659,8 +2721,8 @@ function renderLfConfirmItens(){
       return '<div style="border-top:1px solid var(--creme-dark);padding:10px 0">'+
         '<div style="font-weight:600;font-size:.88rem">'+esc(it.produto_nome)+' <span style="font-weight:400;color:var(--text-light)">— faltaram '+it.diferenca+'</span></div>'+
         '<div class="row" style="margin:6px 0 4px">'+
-          '<div class="field" style="max-width:110px"><label>Vendido</label><input class="inp" type="number" min="0" step="0.01" value="'+it.qtd_vendida+'" onchange="lfConfirmItens['+i+'].qtd_vendida=this.value;renderLfConfirmItens()"></div>'+
-          '<div class="field" style="max-width:110px"><label>Perda/quebra</label><input class="inp" type="number" min="0" step="0.01" value="'+it.qtd_perda+'" onchange="lfConfirmItens['+i+'].qtd_perda=this.value;renderLfConfirmItens()"></div>'+
+          '<div class="field" style="max-width:110px"><label>Vendido</label><input class="inp" type="number" min="0" step="1" value="'+it.qtd_vendida+'" onchange="lfConfirmItens['+i+'].qtd_vendida=this.value;renderLfConfirmItens()"></div>'+
+          '<div class="field" style="max-width:110px"><label>Perda/quebra</label><input class="inp" type="number" min="0" step="1" value="'+it.qtd_perda+'" onchange="lfConfirmItens['+i+'].qtd_perda=this.value;renderLfConfirmItens()"></div>'+
           (Number(it.qtd_perda)>0 ? '<div class="field" style="flex:1"><label>Motivo da perda</label><input class="inp" type="text" value="'+esc(it.motivo_perda||'')+'" onchange="lfConfirmItens['+i+'].motivo_perda=this.value" placeholder="Ex: validade vencida, derreteu..."></div>' : '')+
         '</div>'+
         (!bate
@@ -2677,6 +2739,8 @@ function renderLfConfirmItens(){
 async function lfSalvarConfirmacao(){
   const naoBate = lfConfirmItens.some(it => it.diferenca > 0 && Math.abs((Number(it.qtd_vendida||0)+Number(it.qtd_perda||0)) - it.diferenca) > 0.001);
   if (naoBate){ showMsg('lfcfMsg','Ajuste os itens em vermelho — vendido + perda precisa bater com o que faltou.','err'); return; }
+  const naoInteiro = lfConfirmItens.some(it => !Number.isInteger(Number(it.qtd_vendida)) || !Number.isInteger(Number(it.qtd_perda)));
+  if (naoInteiro){ showMsg('lfcfMsg','Vendido e perda são sempre em unidades inteiras.','err'); return; }
   const semMotivo = lfConfirmItens.some(it => Number(it.qtd_perda)>0 && !it.motivo_perda.trim());
   if (semMotivo){ showMsg('lfcfMsg','Informe o motivo da perda pros itens com perda/quebra.','err'); return; }
 
