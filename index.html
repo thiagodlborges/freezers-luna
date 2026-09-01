@@ -268,6 +268,8 @@
         </select>
       </div>
     </div>
+    <h4 style="font-size:.9rem;margin-top:10px;margin-bottom:6px">Itens da proposta <span class="hint" style="margin:0;font-weight:400">(confira e corrija antes de efetivar, se precisar)</span></h4>
+    <div id="efItensLista"></div>
     <p style="font-size:.85rem;margin:10px 0 4px"><strong>Total da venda: <span id="efValorTotal">R$ 0,00</span></strong></p>
     <h4 style="font-size:.9rem;margin-top:14px;margin-bottom:6px">Parcelas / vencimentos</h4>
     <div id="efParcelasLista"></div>
@@ -1016,6 +1018,7 @@ async function salvarVisita(){
 
 let efParcelasAtual = [];
 let efValorTotalAtual = 0;
+let efItensAtuais = [];
 
 async function abrirModalEfetivar(visitaId){
   $('efMsg').className = 'msg';
@@ -1023,14 +1026,32 @@ async function abrirModalEfetivar(visitaId){
   $('efNumeroNota').value = '';
   $('efFormaPagamento').value = 'Boleto';
 
-  const { data: itens, error } = await sb.from('freezer_visita_itens').select('quantidade,valor_unitario').eq('visita_id', visitaId);
+  const { data: itens, error } = await sb.from('freezer_visita_itens').select('id,produto_nome,quantidade,unidade,valor_unitario').eq('visita_id', visitaId).order('produto_nome');
   if (error){ alert('Erro ao carregar itens da venda: '+error.message); return; }
-  efValorTotalAtual = (itens||[]).reduce((s,it) => s + Number(it.quantidade)*Number(it.valor_unitario), 0);
-  $('efValorTotal').textContent = fmtMoeda(efValorTotalAtual);
+  efItensAtuais = (itens||[]).map(it => ({ id: it.id, produto_nome: it.produto_nome, quantidade: Number(it.quantidade), unidade: it.unidade, valor_unitario: Number(it.valor_unitario) }));
+  renderEfItens();
 
   efParcelasAtual = [{ valor: efValorTotalAtual.toFixed(2), vencimento: '' }];
   renderParcelasEfetivar();
   $('modalEfetivar').classList.add('show');
+}
+
+function renderEfItens(){
+  const wrap = $('efItensLista');
+  wrap.innerHTML = efItensAtuais.map((it,i) =>
+    '<div class="row" style="align-items:flex-end;margin-bottom:6px">'+
+      '<div class="field" style="flex:1;min-width:140px"><label>Produto</label><input class="inp" value="'+esc(it.produto_nome)+'" disabled></div>'+
+      '<div class="field" style="max-width:100px"><label>Qtd'+(it.unidade?' ('+esc(it.unidade)+')':'')+'</label><input class="inp" type="number" min="0" step="0.01" value="'+it.quantidade+'" onchange="efItensAtuais['+i+'].quantidade=Number(this.value)||0; recalcularEfValorTotal()"></div>'+
+      '<div class="field" style="max-width:120px"><label>Valor unit.</label><input class="inp" type="number" min="0" step="0.01" value="'+it.valor_unitario+'" onchange="efItensAtuais['+i+'].valor_unitario=Number(this.value)||0; recalcularEfValorTotal()"></div>'+
+    '</div>'
+  ).join('') || '<p class="hint">Nenhum item registrado nessa visita.</p>';
+  recalcularEfValorTotal();
+}
+
+function recalcularEfValorTotal(){
+  efValorTotalAtual = efItensAtuais.reduce((s,it) => s + Number(it.quantidade)*Number(it.valor_unitario), 0);
+  $('efValorTotal').textContent = fmtMoeda(efValorTotalAtual);
+  atualizarSomaParcelas();
 }
 
 function renderParcelasEfetivar(){
@@ -1089,9 +1110,25 @@ async function salvarEfetivacao(){
   if (efParcelasAtual.some(p => !p.vencimento)){
     showMsg('efMsg','Preencha a data de vencimento de todas as parcelas.','err'); return;
   }
+  if (efItensAtuais.some(it => it.quantidade < 0 || it.valor_unitario < 0)){
+    showMsg('efMsg','Quantidade e valor unitário não podem ser negativos.','err'); return;
+  }
 
   const btn = $('btnSalvarEfetivar');
   btn.disabled = true; btn.textContent = 'Salvando…';
+
+  // Grava eventuais correções nos itens da proposta antes de efetivar — a
+  // função de efetivação recalcula o total a partir dessas linhas.
+  for (const it of efItensAtuais){
+    const { error: errItem } = await sb.from('freezer_visita_itens')
+      .update({ quantidade: it.quantidade, valor_unitario: it.valor_unitario })
+      .eq('id', it.id);
+    if (errItem){
+      btn.disabled = false; btn.textContent = 'Confirmar Venda';
+      showMsg('efMsg', 'Erro ao salvar item "'+it.produto_nome+'": '+errItem.message, 'err');
+      return;
+    }
+  }
 
   const payload = {
     p_visita_id: visitaId,
