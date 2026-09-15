@@ -186,7 +186,10 @@
       <div class="field" style="flex:1"><label>Cidade</label><input class="inp" id="mfCidade"></div>
     </div>
     <div class="row">
-      <div class="field" style="flex:1"><label>Repositor responsável</label><select class="inp" id="mfRepositor"></select></div>
+      <div class="field" style="flex:1"><label>Repositor responsável</label>
+        <select class="inp" id="mfRepositor"></select>
+        <p class="hint" id="mfRepositorFixo" style="display:none;margin:6px 0 0"></p>
+      </div>
       <div class="field" style="flex:1"><label>Status</label>
         <select class="inp" id="mfStatus">
           <option value="ativo">Ativo</option>
@@ -454,7 +457,8 @@ async function renderFreezers(){
   $('mainContent').innerHTML = '<div class="loading">Carregando…</div>';
   const freezers = await carregarFreezers();
 
-  const botaoNovo = souBackoffice ? '<button class="btn" onclick="abrirModalFreezer()">+ Novo Freezer</button>' : '';
+  const podeCadastrar = souBackoffice || souRepositor;
+  const botaoNovo = podeCadastrar ? '<button class="btn" onclick="abrirModalFreezer()">+ Novo Freezer</button>' : '';
 
   $('mainContent').innerHTML = '<div class="card"><h2>'+(souBackoffice?'Freezers':'Minha Carteira')+'</h2>'+botaoNovo+
     '<div class="field" style="margin-top:14px"><input class="inp" type="text" id="freezerBusca" placeholder="Buscar por nome, código, rede ou cidade…" oninput="renderFreezersLista()"></div>'+
@@ -487,6 +491,7 @@ async function renderPrecificacaoFreezers(){
 }
 
 function renderFreezersLista(){
+  const podeCadastrar = souBackoffice || souRepositor;
   const termo = ($('freezerBusca').value || '').toLowerCase().trim();
   const freezers = termo
     ? freezersCache.filter(f => (f.ponto_venda+' '+f.codigo+' '+(f.rede||'')+' '+(f.cidade||'')+' '+(f.observacoes||'')).toLowerCase().includes(termo))
@@ -501,7 +506,7 @@ function renderFreezersLista(){
       '</div>'+
       '<div class="facoes">'+
         '<button class="btn btn-sm" onclick="irParaVisita(\''+f.id+'\')">📝 Nova visita</button>'+
-        (souBackoffice ? '<button class="btn-outline btn btn-sm" onclick="abrirModalFreezer(\''+f.id+'\')">Editar</button>' : '')+
+        (podeCadastrar ? '<button class="btn-outline btn btn-sm" onclick="abrirModalFreezer(\''+f.id+'\')">Editar</button>' : '')+
       '</div>'+
     '</div>'
   )).join('') : '<div class="empty">'+(termo ? 'Nenhum freezer encontrado pra "'+esc(termo)+'".' : (souBackoffice ? 'Nenhum freezer cadastrado ainda.' : 'Você ainda não tem freezers na carteira.'))+'</div>';
@@ -705,7 +710,22 @@ async function popularSelectRepositores(selecionadoId){
 
 async function abrirModalFreezer(id){
   $('mfMsg').className = 'msg';
-  await popularSelectRepositores(null);
+
+  // Consultor (repositor sem acesso de backoffice) só pode cadastrar/editar
+  // freezer da própria carteira — o campo fica travado no próprio nome, sem
+  // dropdown de repositores (que é uma lista de terceiros que ele não
+  // precisa, e não teria como escolher mesmo: a política do banco só aceita
+  // repositor_id = ele mesmo).
+  if (souBackoffice) {
+    $('mfRepositor').style.display = '';
+    $('mfRepositorFixo').style.display = 'none';
+    await popularSelectRepositores(id ? (freezersCache.find(x=>x.id===id)||{}).repositor_id : null);
+  } else {
+    $('mfRepositor').style.display = 'none';
+    $('mfRepositorFixo').style.display = 'block';
+    $('mfRepositorFixo').textContent = 'Este freezer fica na sua carteira (' + (meuPerfil.nome || 'você') + ').';
+  }
+
   await popularSelectTabelasPreco(id ? (freezersCache.find(x=>x.id===id)||{}).tabela_preco_id : null);
   if (id){
     const f = freezersCache.find(x => x.id === id);
@@ -734,8 +754,13 @@ async function abrirModalFreezer(id){
 
 async function salvarFreezer(){
   const id = $('mfId').value;
-  const repositorId = $('mfRepositor').value || null;
-  const repositorNome = repositorId ? $('mfRepositor').selectedOptions[0].textContent : null;
+  // Consultor sempre grava no próprio nome — trava aqui também no front,
+  // além da política do banco, pra dar uma mensagem clara em vez de um erro
+  // de permissão genérico se algo tentar mudar isso.
+  const repositorId = souBackoffice ? ($('mfRepositor').value || null) : meuPerfil.id;
+  const repositorNome = souBackoffice
+    ? (repositorId ? $('mfRepositor').selectedOptions[0].textContent : null)
+    : meuPerfil.nome;
   const codigoCliente = $('mfCodigoCliente').value.trim() || null;
   const numeroPatrimonio = $('mfNumeroPatrimonio').value.trim() || null;
   const payload = {
@@ -1647,12 +1672,14 @@ async function renderRotas(){
         '<button class="btn'+(rtSubTab==='salvas'?'':'-outline')+' btn-sm" onclick="rtSubTab=\'salvas\';renderRotas()">💾 Minhas Rotas Salvas</button>'+
         '<button class="btn'+(rtSubTab==='auto'?'':'-outline')+' btn-sm" onclick="rtSubTab=\'auto\';renderRotas()">📍 Sugestão Automática</button>'+
         '<button class="btn'+(rtSubTab==='semanal'?'':'-outline')+' btn-sm" onclick="rtSubTab=\'semanal\';renderRotas()">📅 Planejamento Semanal</button>'+
+        '<button class="btn'+(rtSubTab==='avaliacao'?'':'-outline')+' btn-sm" onclick="rtSubTab=\'avaliacao\';renderRotas()">📊 Planejado vs Realizado</button>'+
       '</div>'+
       '<div id="rtSubConteudo" style="margin-top:14px"><div class="loading">Carregando…</div></div>'+
     '</div>';
 
   if (rtSubTab === 'salvas') await carregarRotasSalvas();
   else if (rtSubTab === 'auto') await carregarRotasSugestao();
+  else if (rtSubTab === 'avaliacao') await carregarAvaliacaoSemanal();
   else await carregarPlanejamentoSemanal();
 }
 
@@ -1960,6 +1987,10 @@ function renderResultadoSemanal(){
   if (!semanaResultado){ el.innerHTML = ''; return; }
 
   el.innerHTML =
+    '<div style="display:flex;justify-content:flex-end;margin-bottom:10px">'+
+      '<button class="btn btn-sm" onclick="salvarPlanejamentoSemanal()">💾 Salvar Planejamento da Semana</button>'+
+    '</div>'+
+    '<div class="msg" id="semPlanoMsg"></div>'+
     (semanaSemGeo.length ? '<div class="msg show err" style="margin-bottom:12px">'+semanaSemGeo.length+' cliente(s) selecionado(s) sem geolocalização cadastrada, por isso ficaram de fora da rota: '+semanaSemGeo.map(f=>esc(f.ponto_venda)).join(', ')+'.</div>' : '')+
     (semanaSobra.length ? '<div class="msg show err" style="margin-bottom:12px">'+semanaSobra.length+' cliente(s) não couberam nos dias/limite disponíveis: '+semanaSobra.map(f=>esc(f.ponto_venda)).join(', ')+'. Aumente o número de dias úteis, aumente o limite de visitas por dia, ou remova alguém da seleção.</div>' : '')+
     semanaResultado.map((g, i) => {
@@ -1983,11 +2014,169 @@ function renderResultadoSemanal(){
     }).join('');
 }
 
-async function carregarRotasSalvas(){
+async function salvarPlanejamentoSemanal(){
+  if (!semanaResultado || !semanaRepositorAtual) return;
+  const totalParadas = semanaResultado.reduce((s,g) => s + g.paradas.length, 0);
+  if (!totalParadas){ showMsg('semPlanoMsg', 'Não há paradas geradas pra salvar.', 'err'); return; }
+
+  showMsg('semPlanoMsg', 'Salvando…', '');
+
+  // upsert do cabeçalho: se já existe planejamento salvo pra esse repositor
+  // nessa semana, substitui os itens (permite gerar de novo e salvar por
+  // cima, em vez de acumular planejamentos duplicados da mesma semana).
+  const { data: existente } = await sb.from('freezer_planejamento_semanal')
+    .select('id').eq('repositor_id', semanaRepositorAtual).eq('semana_inicio', semanaDataInicio).maybeSingle();
+
+  let planejamentoId;
+  if (existente){
+    planejamentoId = existente.id;
+    await sb.from('freezer_planejamento_semanal').update({
+      atualizado_em: new Date().toISOString(), criado_por: meuPerfil.id, criado_por_nome: meuPerfil.nome,
+    }).eq('id', planejamentoId);
+    await sb.from('freezer_planejamento_itens').delete().eq('planejamento_id', planejamentoId);
+  } else {
+    const { data, error } = await sb.from('freezer_planejamento_semanal').insert({
+      repositor_id: semanaRepositorAtual, semana_inicio: semanaDataInicio,
+      criado_por: meuPerfil.id, criado_por_nome: meuPerfil.nome,
+    }).select('id').single();
+    if (error){ showMsg('semPlanoMsg', 'Erro: '+error.message, 'err'); return; }
+    planejamentoId = data.id;
+  }
+
+  const itens = [];
+  semanaResultado.forEach(g => {
+    g.paradas.forEach(p => itens.push({ planejamento_id: planejamentoId, freezer_id: p.id, data_planejada: g.data, dia_semana: g.chave }));
+  });
+  const { error: errItens } = await sb.from('freezer_planejamento_itens').insert(itens);
+  if (errItens){ showMsg('semPlanoMsg', 'Erro ao salvar itens: '+errItens.message, 'err'); return; }
+
+  showMsg('semPlanoMsg', 'Planejamento salvo! '+totalParadas+' parada(s) em '+semanaResultado.filter(g=>g.paradas.length).length+' dia(s) — já dá pra avaliar depois em "Planejado vs Realizado".', 'ok');
+}
+
+// ── Planejado vs Realizado ──────────────────────────────
+let avalRepositorAtual = null;
+let avalDataInicio = null;
+let avalDataFim = null;
+
+async function carregarAvaliacaoSemanal(){
   const el = $('rtSubConteudo');
+  if (!souBackoffice) avalRepositorAtual = meuPerfil.id;
+  if (!avalDataFim) avalDataFim = isoDateStr(new Date());
+  if (!avalDataInicio) { const d = new Date(); d.setDate(d.getDate()-28); avalDataInicio = isoDateStr(d); }
+
+  if (souBackoffice && !rtRepositoresCache){
+    const { data } = await sb.rpc('freezers_listar_repositores');
+    rtRepositoresCache = data || [];
+  }
+
+  el.innerHTML =
+    '<p class="hint">Compara o que foi planejado (Planejamento Semanal salvo) com as visitas de fato registradas, no período escolhido.</p>'+
+    '<div class="row" style="align-items:flex-end;gap:12px;flex-wrap:wrap">'+
+      (souBackoffice ? '<div class="field" style="max-width:280px"><label>Repositor</label><select class="inp" id="avalRepositor" onchange="mudarRepositorAvaliacao()">'+
+        '<option value="">— selecione —</option>'+
+        (rtRepositoresCache||[]).map(r => '<option value="'+r.id+'"'+(avalRepositorAtual===r.id?' selected':'')+'>'+esc(r.nome)+'</option>').join('')+
+      '</select></div>' : '')+
+      '<div class="field" style="max-width:170px"><label>De</label><input class="inp" type="date" id="avalDataInicio" value="'+avalDataInicio+'" onchange="mudarPeriodoAvaliacao()"></div>'+
+      '<div class="field" style="max-width:170px"><label>Até</label><input class="inp" type="date" id="avalDataFim" value="'+avalDataFim+'" onchange="mudarPeriodoAvaliacao()"></div>'+
+    '</div>'+
+    '<div id="avalConteudo" style="margin-top:14px">'+(souBackoffice && !avalRepositorAtual ? '<div class="empty">Escolha um repositor.</div>' : '<div class="loading">Carregando…</div>')+'</div>';
+
+  if (avalRepositorAtual) await buscarAvaliacaoSemanal();
+}
+
+function mudarRepositorAvaliacao(){
+  avalRepositorAtual = $('avalRepositor').value || null;
+  if (avalRepositorAtual) buscarAvaliacaoSemanal();
+  else $('avalConteudo').innerHTML = '<div class="empty">Escolha um repositor.</div>';
+}
+
+function mudarPeriodoAvaliacao(){
+  avalDataInicio = $('avalDataInicio').value;
+  avalDataFim = $('avalDataFim').value;
+  if (avalRepositorAtual) buscarAvaliacaoSemanal();
+}
+
+async function buscarAvaliacaoSemanal(){
+  const el = $('avalConteudo');
   el.innerHTML = '<div class="loading">Carregando…</div>';
 
-  const { data: rotas, error } = await sb.from('freezer_rotas').select('id, nome, repositor_id, atualizado_em').order('nome');
+  // Pega todo planejamento cuja semana toca o período escolhido (a semana
+  // inteira entra mesmo que só uma parte caia dentro do intervalo — senão
+  // uma semana "cortada" no meio do período fica com pedaço faltando).
+  const inicioBusca = new Date(avalDataInicio+'T12:00'); inicioBusca.setDate(inicioBusca.getDate()-6);
+  const { data: planos, error } = await sb.from('freezer_planejamento_semanal')
+    .select('id, semana_inicio, freezer_planejamento_itens(freezer_id, data_planejada, dia_semana, freezers(ponto_venda, rede, cidade))')
+    .eq('repositor_id', avalRepositorAtual)
+    .gte('semana_inicio', isoDateStr(inicioBusca)).lte('semana_inicio', avalDataFim)
+    .order('semana_inicio');
+  if (error){ el.innerHTML = '<div class="empty">Erro: '+esc(error.message)+'</div>'; return; }
+  if (!planos || !planos.length){ el.innerHTML = '<div class="empty">Nenhum planejamento salvo nesse período pra esse repositor.</div>'; return; }
+
+  // Junta todos os itens planejados que caem dentro do período escolhido
+  // (a semana pode ter sido salva antes, mas só avaliamos os dias pedidos).
+  const itensNoPeriodo = [];
+  planos.forEach(p => (p.freezer_planejamento_itens||[]).forEach(it => {
+    if (it.data_planejada >= avalDataInicio && it.data_planejada <= avalDataFim) itensNoPeriodo.push({ ...it, semana_inicio: p.semana_inicio });
+  }));
+  if (!itensNoPeriodo.length){ el.innerHTML = '<div class="empty">Nenhuma parada planejada cai dentro do período escolhido.</div>'; return; }
+
+  const freezerIds = [...new Set(itensNoPeriodo.map(i => i.freezer_id))];
+  const { data: visitas } = await sb.from('freezer_visitas')
+    .select('freezer_id, data_visita, houve_visita')
+    .in('freezer_id', freezerIds)
+    .gte('data_visita', avalDataInicio).lte('data_visita', avalDataFim);
+
+  // Cumprido = existe visita de fato (houve_visita ≠ false) pro mesmo
+  // freezer na mesma semana planejada — não exige o dia exato, porque na
+  // prática a visita pode escorregar um dia sem deixar de "cumprir" a semana.
+  const visitasPorFreezerSemana = {};
+  (visitas||[]).forEach(v => {
+    if (v.houve_visita === false) return;
+    const seg = isoDateStr(segundaDaSemana(new Date(v.data_visita+'T12:00')));
+    const chave = v.freezer_id+'|'+seg;
+    if (!visitasPorFreezerSemana[chave] || v.data_visita > visitasPorFreezerSemana[chave]) visitasPorFreezerSemana[chave] = v.data_visita;
+  });
+
+  const porSemana = {};
+  itensNoPeriodo.forEach(it => { (porSemana[it.semana_inicio] = porSemana[it.semana_inicio] || []).push(it); });
+  const semanas = Object.keys(porSemana).sort();
+
+  let totalCumprido = 0, totalPlanejado = 0;
+  const blocos = semanas.map(sem => {
+    const itens = porSemana[sem].sort((a,b) => a.data_planejada.localeCompare(b.data_planejada));
+    const fimSemana = new Date(sem+'T12:00'); fimSemana.setDate(fimSemana.getDate()+6);
+    let cumpridos = 0;
+    const linhas = itens.map(it => {
+      const chave = it.freezer_id+'|'+sem;
+      const dataVisitaReal = visitasPorFreezerSemana[chave];
+      if (dataVisitaReal) cumpridos++;
+      const f = it.freezers || {};
+      return '<tr>'+
+        '<td>'+esc(f.ponto_venda||'—')+(f.rede?' <span style="font-size:.75rem;color:var(--text-light)">— '+esc(f.rede)+'</span>':'')+'</td>'+
+        '<td>'+esc(f.cidade||'—')+'</td>'+
+        '<td>'+fmtData(it.data_planejada)+'</td>'+
+        '<td>'+(dataVisitaReal ? '<span class="flag-pill on">✅ Visitado em '+fmtData(dataVisitaReal)+'</span>' : '<span class="flag-pill" style="background:#FDEDEC;color:#B43C3C">❌ Não visitado</span>')+'</td>'+
+      '</tr>';
+    }).join('');
+    totalCumprido += cumpridos; totalPlanejado += itens.length;
+    const pct = itens.length ? Math.round(cumpridos/itens.length*100) : 0;
+    return '<div class="card">'+
+      '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">'+
+        '<h3 style="margin:0">Semana de '+fmtData(sem)+' a '+fmtData(isoDateStr(fimSemana))+'</h3>'+
+        '<span class="flag-pill'+(pct>=80?' on':'')+'" style="'+(pct<80&&pct>=50?'background:#FDF3E0;color:#B8860B':'')+'">'+cumpridos+' de '+itens.length+' cumpridas ('+pct+'%)</span>'+
+      '</div>'+
+      '<div class="table-wrap" style="margin-top:10px"><table><thead><tr><th>Cliente</th><th>Cidade</th><th>Data planejada</th><th>Status</th></tr></thead><tbody>'+linhas+'</tbody></table></div>'+
+    '</div>';
+  }).join('');
+
+  const pctGeral = totalPlanejado ? Math.round(totalCumprido/totalPlanejado*100) : 0;
+  el.innerHTML =
+    '<div class="card" style="background:var(--creme);margin-bottom:14px"><strong>Resumo do período:</strong> '+totalCumprido+' de '+totalPlanejado+' visitas planejadas foram cumpridas ('+pctGeral+'%).</div>'+
+    blocos;
+}
+
+async function carregarRotasSalvas(){
+  const el = $('rtSubConteudo');
   if (error){ el.innerHTML = '<div class="empty">Erro: '+esc(error.message)+'</div>'; return; }
 
   if (!rotas || !rotas.length){ el.innerHTML = '<div class="empty">Nenhuma rota salva ainda. Crie uma com "+ Nova rota" ou salve uma sugestão automática.</div>'; return; }
@@ -2288,7 +2477,7 @@ async function renderLojaFab(){
   $('mainContent').innerHTML = '<div class="loading">Carregando…</div>';
   await Promise.all([carregarFreezersLojaFab(), carregarProdutosLojaFab()]);
 
-  if (!souBackoffice && lfSubTab === 'historico') lfSubTab = 'contagem'; // repositor não vê conciliação
+  if (!souBackoffice && !souRepositor && lfSubTab === 'historico') lfSubTab = 'contagem';
 
   $('mainContent').innerHTML =
     '<div class="card">'+
@@ -2311,7 +2500,8 @@ async function renderLojaFab(){
         '<div class="row" style="margin-bottom:0">'+
           '<button class="btn'+(lfSubTab==='contagem'?'':' btn-outline')+' btn-sm" onclick="lfMudarSubTab(\'contagem\')">📋 Nova Contagem</button>'+
           '<button class="btn'+(lfSubTab==='abastecer'?'':' btn-outline')+' btn-sm" onclick="lfMudarSubTab(\'abastecer\')">📦 Abastecimento</button>'+
-          (souBackoffice ? '<button class="btn'+(lfSubTab==='historico'?'':' btn-outline')+' btn-sm" onclick="lfMudarSubTab(\'historico\')">🧾 Histórico e Propostas</button>' : '')+
+          (souBackoffice ? '<button class="btn'+(lfSubTab==='historico'?'':' btn-outline')+' btn-sm" onclick="lfMudarSubTab(\'historico\')">🧾 Histórico e Propostas</button>' :
+            (souRepositor ? '<button class="btn'+(lfSubTab==='historico'?'':' btn-outline')+' btn-sm" onclick="lfMudarSubTab(\'historico\')">🧾 Histórico</button>' : ''))+
         '</div>'+
         (souBackoffice ? '<button class="btn-outline btn btn-sm" onclick="lfExportarExcel()">📊 Exportar Excel (recebíveis e perdas)</button>' : '')+
       '</div>'+
@@ -2325,7 +2515,7 @@ async function renderLojaFab(){
 
   if (lfSubTab === 'contagem') renderLfContagem();
   else if (lfSubTab === 'abastecer') renderLfAbastecer();
-  else if (souBackoffice) await renderLfHistorico();
+  else if (souBackoffice || souRepositor) await renderLfHistorico();
 }
 
 async function lfExportarExcel(){
@@ -2716,9 +2906,15 @@ async function renderLfHistorico(){
         ? (souMaster ? '<button class="btn-danger btn-sm" onclick="lfExcluirContagem(\''+c.id+'\',\'confirmada\')">🗑️ Excluir</button>' : '')
         : '<button class="btn-outline btn btn-sm" onclick="lfEditarContagem(\''+c.id+'\')">✏️ Editar</button>'+
           '<button class="btn-danger btn-sm" onclick="lfExcluirContagem(\''+c.id+'\',\'proposta\')">🗑️ Excluir</button>';
+      // A confirmação envolve conciliação bancária (forma de pagamento, valor
+      // recebido) — isso é trabalho do administrativo. Quem só opera a Loja
+      // de Fábrica pode consultar e corrigir a própria contagem, mas não
+      // confirma o recebimento.
       const statusPill = c.status === 'confirmada'
         ? '<span class="flag-pill on" style="background:#E7F3E8;color:#2E7D32;font-weight:600">✅ Confirmada — '+fmtMoeda(c.valor_confirmado)+(c.forma_pagamento?' — '+esc(c.forma_pagamento):'')+'</span>'
-        : '<button class="btn btn-sm" style="background:#B8860B" onclick="lfAbrirModalConfirmar(\''+c.id+'\')">📝 Revisar e confirmar — proposta '+fmtMoeda(c.valor_proposto)+'</button>';
+        : (souBackoffice
+            ? '<button class="btn btn-sm" style="background:#B8860B" onclick="lfAbrirModalConfirmar(\''+c.id+'\')">📝 Revisar e confirmar — proposta '+fmtMoeda(c.valor_proposto)+'</button>'
+            : '<span class="flag-pill" style="background:#FDF3E0;color:#B8860B;font-weight:600">⏳ Aguardando confirmação do administrativo — proposta '+fmtMoeda(c.valor_proposto)+'</span>');
       return '<div class="visita-item">'+
         '<div class="visita-head">'+
           '<div><strong>'+esc(c.freezer_lojafab ? c.freezer_lojafab.nome : '—')+'</strong> — '+fmtData(c.data_contagem)+
