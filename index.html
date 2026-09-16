@@ -2329,6 +2329,25 @@ async function salvarRota(){
   if (!mrParadas.length){ showMsg('mrMsg','Adicione ao menos uma parada.','err'); return; }
 
   let id = rotaId;
+
+  // Ao criar uma rota nova (não editando uma existente), confere se já não
+  // existe outra com o MESMO NOME pra esse repositor. Sem essa checagem, toda
+  // vez que alguém regera uma sugestão (ex: "Quarta-feira — 14/09/2026") e
+  // salva de novo, criava-se uma cópia nova em vez de atualizar a existente —
+  // e a pessoa nunca via a rota "atualizar", só cópias acumulando.
+  if (!id){
+    const { data: existente } = await sb.from('freezer_rotas')
+      .select('id, criado_em').eq('nome', nome).eq('repositor_id', repositorId).maybeSingle();
+    if (existente){
+      const substituir = confirm(
+        'Já existe uma rota chamada "'+nome+'" pra esse repositor (criada em '+new Date(existente.criado_em).toLocaleString('pt-BR')+').\n\n'+
+        'Clique OK pra SUBSTITUIR os pontos dessa rota existente pelos que você acabou de montar, ou Cancelar pra escolher outro nome.'
+      );
+      if (!substituir){ showMsg('mrMsg','Escolha outro nome pra rota, ou edite a rota existente na lista.','err'); return; }
+      id = existente.id;
+    }
+  }
+
   if (id){
     const { error } = await sb.from('freezer_rotas').update({ nome, repositor_id: repositorId }).eq('id', id);
     if (error){ showMsg('mrMsg','Erro: '+error.message,'err'); return; }
