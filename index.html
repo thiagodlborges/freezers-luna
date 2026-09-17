@@ -1685,24 +1685,28 @@ async function renderRotas(){
 
 async function carregarRotasSugestao(){
   const el = $('rtSubConteudo');
+  try {
+    if (souBackoffice && !rtRepositoresCache){
+      const { data } = await sb.rpc('freezers_listar_repositores');
+      rtRepositoresCache = data || [];
+    }
 
-  if (souBackoffice && !rtRepositoresCache){
-    const { data } = await sb.rpc('freezers_listar_repositores');
-    rtRepositoresCache = data || [];
+    el.innerHTML =
+      '<p class="hint">Agrupa os freezers ativos da carteira por proximidade e sugere uma ordem de visita em cada grupo. É uma sugestão — ajuste com o conhecimento de quem roda a região, ou salve como rota fixa pra reutilizar.</p>'+
+      '<div class="row" style="margin-top:10px">'+
+        (souBackoffice ? '<div class="field" style="flex:1"><label>Repositor</label><select class="inp" id="rtRepositor" onchange="carregarRotas()">'+
+          '<option value="">— selecione —</option>'+
+          (rtRepositoresCache||[]).map(r => '<option value="'+r.id+'"'+(rtRepositorSelecionado===r.id?' selected':'')+'>'+esc(r.nome)+'</option>').join('')+
+        '</select></div>' : '')+
+        '<div class="field" style="max-width:160px"><label>Paradas por rota</label><input class="inp" type="number" min="3" max="15" value="7" id="rtTamanho" onchange="carregarRotas()"></div>'+
+      '</div>'+
+      '<div id="rtConteudo" style="margin-top:14px">'+(souBackoffice && !rtRepositorSelecionado ?'<div class="empty">Escolha um repositor.</div>':'<div class="loading">Carregando…</div>')+'</div>';
+
+    if (!souBackoffice || rtRepositorSelecionado) await carregarRotas();
+  } catch (e) {
+    console.error('Erro ao carregar Sugestão Automática:', e);
+    el.innerHTML = '<div class="empty">Não deu pra carregar essa tela (erro: '+esc(e.message||String(e))+'). Tente recarregar a página; se persistir, avise o suporte.</div>';
   }
-
-  el.innerHTML =
-    '<p class="hint">Agrupa os freezers ativos da carteira por proximidade e sugere uma ordem de visita em cada grupo. É uma sugestão — ajuste com o conhecimento de quem roda a região, ou salve como rota fixa pra reutilizar.</p>'+
-    '<div class="row" style="margin-top:10px">'+
-      (souBackoffice ? '<div class="field" style="flex:1"><label>Repositor</label><select class="inp" id="rtRepositor" onchange="carregarRotas()">'+
-        '<option value="">— selecione —</option>'+
-        (rtRepositoresCache||[]).map(r => '<option value="'+r.id+'"'+(rtRepositorSelecionado===r.id?' selected':'')+'>'+esc(r.nome)+'</option>').join('')+
-      '</select></div>' : '')+
-      '<div class="field" style="max-width:160px"><label>Paradas por rota</label><input class="inp" type="number" min="3" max="15" value="7" id="rtTamanho" onchange="carregarRotas()"></div>'+
-    '</div>'+
-    '<div id="rtConteudo" style="margin-top:14px">'+(souBackoffice && !rtRepositorSelecionado ?'<div class="empty">Escolha um repositor.</div>':'<div class="loading">Carregando…</div>')+'</div>';
-
-  if (!souBackoffice || rtRepositorSelecionado) await carregarRotas();
 }
 
 async function carregarRotas(){
@@ -1763,27 +1767,32 @@ const DIAS_UTEIS_DEFS = [ ['seg','Segunda'], ['ter','Terça'], ['qua','Quarta'],
 
 async function carregarPlanejamentoSemanal(){
   const el = $('rtSubConteudo');
-  if (souBackoffice && !rtRepositoresCache){
-    const { data } = await sb.rpc('freezers_listar_repositores');
-    rtRepositoresCache = data || [];
-  }
-  if (!souBackoffice) semanaRepositorAtual = meuPerfil.id;
-  if (!semanaDataInicio) semanaDataInicio = isoDateStr(segundaDaSemana(new Date()));
-
-  el.innerHTML =
-    '<p class="hint">A lista vem ordenada dos clientes há mais tempo sem visita pro mais recente, com quem já passou do prazo ideal (aba Frequência de Visitas) pré-marcado. Ajuste a seleção como quiser (ou use o filtro rápido abaixo), defina um limite de visitas por dia se quiser, escolha os dias úteis disponíveis e gere a rota otimizada por dia.</p>'+
-    (souBackoffice ? '<div class="field" style="max-width:280px;margin-bottom:10px"><label>Repositor</label><select class="inp" id="semRepositor" onchange="mudarRepositorSemanal()">'+
-      '<option value="">— selecione —</option>'+
-      (rtRepositoresCache||[]).map(r => '<option value="'+r.id+'"'+(semanaRepositorAtual===r.id?' selected':'')+'>'+esc(r.nome)+'</option>').join('')+
-    '</select></div>' : '')+
-    '<div id="semConteudo">'+(souBackoffice && !semanaRepositorAtual ? '<div class="empty">Escolha um repositor.</div>' : '<div class="loading">Carregando…</div>')+'</div>';
-
-  if (semanaRepositorAtual){
-    if (semanaCacheRepositorId === semanaRepositorAtual && semanaClientesCache.length){
-      renderSemanal(); // já carregado antes — reaproveita seleção e resultado gerado, sem refazer a consulta
-    } else {
-      await buscarClientesSemanal();
+  try {
+    if (souBackoffice && !rtRepositoresCache){
+      const { data } = await sb.rpc('freezers_listar_repositores');
+      rtRepositoresCache = data || [];
     }
+    if (!souBackoffice) semanaRepositorAtual = meuPerfil.id;
+    if (!semanaDataInicio) semanaDataInicio = isoDateStr(segundaDaSemana(new Date()));
+
+    el.innerHTML =
+      '<p class="hint">A lista vem ordenada dos clientes há mais tempo sem visita pro mais recente, com quem já passou do prazo ideal (aba Frequência de Visitas) pré-marcado. Ajuste a seleção como quiser (ou use o filtro rápido abaixo), defina um limite de visitas por dia se quiser, escolha os dias úteis disponíveis e gere a rota otimizada por dia.</p>'+
+      (souBackoffice ? '<div class="field" style="max-width:280px;margin-bottom:10px"><label>Repositor</label><select class="inp" id="semRepositor" onchange="mudarRepositorSemanal()">'+
+        '<option value="">— selecione —</option>'+
+        (rtRepositoresCache||[]).map(r => '<option value="'+r.id+'"'+(semanaRepositorAtual===r.id?' selected':'')+'>'+esc(r.nome)+'</option>').join('')+
+      '</select></div>' : '')+
+      '<div id="semConteudo">'+(souBackoffice && !semanaRepositorAtual ? '<div class="empty">Escolha um repositor.</div>' : '<div class="loading">Carregando…</div>')+'</div>';
+
+    if (semanaRepositorAtual){
+      if (semanaCacheRepositorId === semanaRepositorAtual && semanaClientesCache.length){
+        renderSemanal(); // já carregado antes — reaproveita seleção e resultado gerado, sem refazer a consulta
+      } else {
+        await buscarClientesSemanal();
+      }
+    }
+  } catch (e) {
+    console.error('Erro ao carregar Planejamento Semanal:', e);
+    el.innerHTML = '<div class="empty">Não deu pra carregar essa tela (erro: '+esc(e.message||String(e))+'). Tente recarregar a página; se persistir, avise o suporte.</div>';
   }
 }
 
@@ -2060,28 +2069,33 @@ let avalDataFim = null;
 
 async function carregarAvaliacaoSemanal(){
   const el = $('rtSubConteudo');
-  if (!souBackoffice) avalRepositorAtual = meuPerfil.id;
-  if (!avalDataFim) avalDataFim = isoDateStr(new Date());
-  if (!avalDataInicio) { const d = new Date(); d.setDate(d.getDate()-28); avalDataInicio = isoDateStr(d); }
+  try {
+    if (!souBackoffice) avalRepositorAtual = meuPerfil.id;
+    if (!avalDataFim) avalDataFim = isoDateStr(new Date());
+    if (!avalDataInicio) { const d = new Date(); d.setDate(d.getDate()-28); avalDataInicio = isoDateStr(d); }
 
-  if (souBackoffice && !rtRepositoresCache){
-    const { data } = await sb.rpc('freezers_listar_repositores');
-    rtRepositoresCache = data || [];
+    if (souBackoffice && !rtRepositoresCache){
+      const { data } = await sb.rpc('freezers_listar_repositores');
+      rtRepositoresCache = data || [];
+    }
+
+    el.innerHTML =
+      '<p class="hint">Compara o que foi planejado (Planejamento Semanal salvo) com as visitas de fato registradas, no período escolhido.</p>'+
+      '<div class="row" style="align-items:flex-end;gap:12px;flex-wrap:wrap">'+
+        (souBackoffice ? '<div class="field" style="max-width:280px"><label>Repositor</label><select class="inp" id="avalRepositor" onchange="mudarRepositorAvaliacao()">'+
+          '<option value="">— selecione —</option>'+
+          (rtRepositoresCache||[]).map(r => '<option value="'+r.id+'"'+(avalRepositorAtual===r.id?' selected':'')+'>'+esc(r.nome)+'</option>').join('')+
+        '</select></div>' : '')+
+        '<div class="field" style="max-width:170px"><label>De</label><input class="inp" type="date" id="avalDataInicio" value="'+avalDataInicio+'" onchange="mudarPeriodoAvaliacao()"></div>'+
+        '<div class="field" style="max-width:170px"><label>Até</label><input class="inp" type="date" id="avalDataFim" value="'+avalDataFim+'" onchange="mudarPeriodoAvaliacao()"></div>'+
+      '</div>'+
+      '<div id="avalConteudo" style="margin-top:14px">'+(souBackoffice && !avalRepositorAtual ? '<div class="empty">Escolha um repositor.</div>' : '<div class="loading">Carregando…</div>')+'</div>';
+
+    if (avalRepositorAtual) await buscarAvaliacaoSemanal();
+  } catch (e) {
+    console.error('Erro ao carregar Planejado vs Realizado:', e);
+    el.innerHTML = '<div class="empty">Não deu pra carregar essa tela (erro: '+esc(e.message||String(e))+'). Tente recarregar a página; se persistir, avise o suporte.</div>';
   }
-
-  el.innerHTML =
-    '<p class="hint">Compara o que foi planejado (Planejamento Semanal salvo) com as visitas de fato registradas, no período escolhido.</p>'+
-    '<div class="row" style="align-items:flex-end;gap:12px;flex-wrap:wrap">'+
-      (souBackoffice ? '<div class="field" style="max-width:280px"><label>Repositor</label><select class="inp" id="avalRepositor" onchange="mudarRepositorAvaliacao()">'+
-        '<option value="">— selecione —</option>'+
-        (rtRepositoresCache||[]).map(r => '<option value="'+r.id+'"'+(avalRepositorAtual===r.id?' selected':'')+'>'+esc(r.nome)+'</option>').join('')+
-      '</select></div>' : '')+
-      '<div class="field" style="max-width:170px"><label>De</label><input class="inp" type="date" id="avalDataInicio" value="'+avalDataInicio+'" onchange="mudarPeriodoAvaliacao()"></div>'+
-      '<div class="field" style="max-width:170px"><label>Até</label><input class="inp" type="date" id="avalDataFim" value="'+avalDataFim+'" onchange="mudarPeriodoAvaliacao()"></div>'+
-    '</div>'+
-    '<div id="avalConteudo" style="margin-top:14px">'+(souBackoffice && !avalRepositorAtual ? '<div class="empty">Escolha um repositor.</div>' : '<div class="loading">Carregando…</div>')+'</div>';
-
-  if (avalRepositorAtual) await buscarAvaliacaoSemanal();
 }
 
 function mudarRepositorAvaliacao(){
@@ -2177,40 +2191,47 @@ async function buscarAvaliacaoSemanal(){
 
 async function carregarRotasSalvas(){
   const el = $('rtSubConteudo');
-  if (error){ el.innerHTML = '<div class="empty">Erro: '+esc(error.message)+'</div>'; return; }
+  el.innerHTML = '<div class="loading">Carregando…</div>';
+  try {
+    const { data: rotas, error } = await sb.from('freezer_rotas').select('id, nome, repositor_id, atualizado_em').order('nome');
+    if (error){ el.innerHTML = '<div class="empty">Erro: '+esc(error.message)+'</div>'; return; }
 
-  if (!rotas || !rotas.length){ el.innerHTML = '<div class="empty">Nenhuma rota salva ainda. Crie uma com "+ Nova rota" ou salve uma sugestão automática.</div>'; return; }
+    if (!rotas || !rotas.length){ el.innerHTML = '<div class="empty">Nenhuma rota salva ainda. Crie uma com "+ Nova rota" ou salve uma sugestão automática.</div>'; return; }
 
-  let nomePorRepositor = {};
-  if (souBackoffice){
-    if (!rtRepositoresCache){ const { data } = await sb.rpc('freezers_listar_repositores'); rtRepositoresCache = data || []; }
-    rtRepositoresCache.forEach(r => { nomePorRepositor[r.id] = r.nome; });
-  }
+    let nomePorRepositor = {};
+    if (souBackoffice){
+      if (!rtRepositoresCache){ const { data } = await sb.rpc('freezers_listar_repositores'); rtRepositoresCache = data || []; }
+      rtRepositoresCache.forEach(r => { nomePorRepositor[r.id] = r.nome; });
+    }
 
-  const { data: paradas } = await sb.from('freezer_rota_paradas').select('rota_id, ordem, freezers(id, ponto_venda, rede, endereco, cidade, codigo, codigo_cliente, latitude, longitude)').order('ordem');
-  const paradasPorRota = {};
-  (paradas||[]).forEach(p => {
-    if (!p.freezers) return; // freezer pode ter sido excluído
-    (paradasPorRota[p.rota_id] = paradasPorRota[p.rota_id] || []).push(p.freezers);
-  });
+    const { data: paradas } = await sb.from('freezer_rota_paradas').select('rota_id, ordem, freezers(id, ponto_venda, rede, endereco, cidade, codigo, codigo_cliente, latitude, longitude)').order('ordem');
+    const paradasPorRota = {};
+    (paradas||[]).forEach(p => {
+      if (!p.freezers) return; // freezer pode ter sido excluído
+      (paradasPorRota[p.rota_id] = paradasPorRota[p.rota_id] || []).push(p.freezers);
+    });
 
-  el.innerHTML = rotas.map(r => {
-    const pts = paradasPorRota[r.id] || [];
-    const nomeRepositor = souBackoffice ? nomePorRepositor[r.repositor_id] : null;
-    return '<div class="card" style="background:var(--creme)">'+
-      '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">'+
-        '<div class="fnome">'+esc(r.nome)+(nomeRepositor ? ' <span style="font-weight:400;color:var(--text-light);font-size:.78rem">— '+esc(nomeRepositor)+'</span>' : '')+'</div>'+
-        '<div style="display:flex;gap:8px;flex-wrap:wrap">'+
-          '<button class="btn-outline btn btn-sm" onclick="abrirModalRota(\''+r.id+'\')">✏️ Editar</button>'+
-          (pts.length ? '<a class="btn btn-sm" href="'+linkGoogleMaps(pts)+'" target="_blank">📍 Abrir no Google Maps</a>' : '')+
-          '<button class="btn-danger btn-sm" onclick="excluirRota(\''+r.id+'\',\''+esc(r.nome).replace(/'/g,"\\'")+'\')">🗑️ Excluir</button>'+
+    el.innerHTML = rotas.map(r => {
+      const pts = paradasPorRota[r.id] || [];
+      const nomeRepositor = souBackoffice ? nomePorRepositor[r.repositor_id] : null;
+      return '<div class="card" style="background:var(--creme)">'+
+        '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">'+
+          '<div class="fnome">'+esc(r.nome)+(nomeRepositor ? ' <span style="font-weight:400;color:var(--text-light);font-size:.78rem">— '+esc(nomeRepositor)+'</span>' : '')+'</div>'+
+          '<div style="display:flex;gap:8px;flex-wrap:wrap">'+
+            '<button class="btn-outline btn btn-sm" onclick="abrirModalRota(\''+r.id+'\')">✏️ Editar</button>'+
+            (pts.length ? '<a class="btn btn-sm" href="'+linkGoogleMaps(pts)+'" target="_blank">📍 Abrir no Google Maps</a>' : '')+
+            '<button class="btn-danger btn-sm" onclick="excluirRota(\''+r.id+'\',\''+esc(r.nome).replace(/'/g,"\\'")+'\')">🗑️ Excluir</button>'+
+          '</div>'+
         '</div>'+
-      '</div>'+
-      (pts.length
-        ? '<ol style="margin:10px 0 0 20px;padding:0;font-size:.85rem">'+pts.map(p => '<li style="margin-bottom:6px">'+fmtParadaLinha(p)+'</li>').join('')+'</ol>'
-        : '<p class="hint" style="margin-top:8px">Nenhuma parada adicionada ainda — clique em Editar.</p>')+
-    '</div>';
-  }).join('');
+        (pts.length
+          ? '<ol style="margin:10px 0 0 20px;padding:0;font-size:.85rem">'+pts.map(p => '<li style="margin-bottom:6px">'+fmtParadaLinha(p)+'</li>').join('')+'</ol>'
+          : '<p class="hint" style="margin-top:8px">Nenhuma parada adicionada ainda — clique em Editar.</p>')+
+      '</div>';
+    }).join('');
+  } catch (e) {
+    console.error('Erro ao carregar Minhas Rotas Salvas:', e);
+    el.innerHTML = '<div class="empty">Não deu pra carregar essa tela (erro: '+esc(e.message||String(e))+'). Tente recarregar a página; se persistir, avise o suporte.</div>';
+  }
 }
 
 async function excluirRota(id, nome){
