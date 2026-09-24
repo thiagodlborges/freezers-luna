@@ -198,7 +198,10 @@
         </select>
       </div>
     </div>
-    <div class="field" style="margin-bottom:10px"><label>Tabela de preço (produtos fora da Precificação, ex: Yeez)</label><select class="inp" id="mfTabelaPreco"></select></div>
+    <div class="row">
+      <div class="field" style="flex:2;margin-bottom:10px"><label>Tabela de preço (produtos fora da Precificação, ex: Yeez)</label><select class="inp" id="mfTabelaPreco"></select></div>
+      <div class="field" style="flex:1;margin-bottom:10px"><label>Desconto comercial padrão (%)</label><input class="inp" type="number" id="mfDescontoPadrao" min="0" max="100" step="0.01" placeholder="0"></div>
+    </div>
     <div class="field" style="margin-bottom:14px"><label>Observações</label><textarea class="inp" id="mfObs" rows="2"></textarea></div>
     <div class="modal-actions">
       <button class="btn" onclick="salvarFreezer()">Salvar</button>
@@ -273,7 +276,19 @@
     </div>
     <h4 style="font-size:.9rem;margin-top:10px;margin-bottom:6px">Itens da proposta <span class="hint" style="margin:0;font-weight:400">(confira e corrija antes de efetivar, se precisar)</span></h4>
     <div id="efItensLista"></div>
-    <p style="font-size:.85rem;margin:10px 0 4px"><strong>Total da venda: <span id="efValorTotal">R$ 0,00</span></strong></p>
+    <p style="font-size:.85rem;margin:10px 0 4px">Valor bruto dos itens: <strong id="efValorBruto">R$ 0,00</strong></p>
+    <h4 style="font-size:.9rem;margin-top:14px;margin-bottom:6px">Desconto comercial</h4>
+    <div class="row" style="align-items:flex-end">
+      <div class="field" style="max-width:150px"><label>Tipo</label>
+        <select class="inp" id="efDescontoTipo" onchange="recalcularEfValorTotal(true)">
+          <option value="percentual">Percentual (%)</option><option value="valor">Valor (R$)</option>
+        </select>
+      </div>
+      <div class="field" style="max-width:130px"><label>Desconto</label><input class="inp" type="number" id="efDescontoValor" min="0" step="0.01" placeholder="0" oninput="recalcularEfValorTotal(true)"></div>
+      <div class="field" style="flex:1;min-width:140px"><label>Motivo (opcional)</label><input class="inp" id="efDescontoMotivo" placeholder="Ex: acordo comercial, bonificação…"></div>
+    </div>
+    <p class="hint" id="efDescontoInfo" style="margin:4px 0 0"></p>
+    <p style="font-size:.9rem;margin:10px 0 4px"><strong>Total a receber (líquido): <span id="efValorTotal">R$ 0,00</span></strong></p>
     <h4 style="font-size:.9rem;margin-top:14px;margin-bottom:6px">Parcelas / vencimentos</h4>
     <div id="efParcelasLista"></div>
     <button class="btn-outline btn btn-sm" onclick="adicionarParcelaEfetivar()">+ Adicionar parcela</button>
@@ -743,9 +758,10 @@ async function abrirModalFreezer(id){
     $('mfStatus').value = f.status || 'ativo';
     $('mfObs').value = f.observacoes || '';
     $('mfRepositor').value = f.repositor_id || '';
+    $('mfDescontoPadrao').value = Number(f.desconto_padrao_pct||0) ? f.desconto_padrao_pct : '';
   } else {
     $('mfTitulo').textContent = 'Novo Freezer';
-    ['mfId','mfNomeFantasia','mfRazaoSocial','mfPontoVenda','mfNumeroLoja','mfCodigoCliente','mfNumeroPatrimonio','mfRede','mfEndereco','mfCidade','mfObs'].forEach(id2 => $(id2).value = '');
+    ['mfId','mfNomeFantasia','mfRazaoSocial','mfPontoVenda','mfNumeroLoja','mfCodigoCliente','mfNumeroPatrimonio','mfRede','mfEndereco','mfCidade','mfObs','mfDescontoPadrao'].forEach(id2 => $(id2).value = '');
     $('mfStatus').value = 'ativo';
     $('mfRepositor').value = '';
   }
@@ -778,8 +794,10 @@ async function salvarFreezer(){
     repositor_id: repositorId,
     repositor_nome: repositorNome,
     tabela_preco_id: $('mfTabelaPreco').value || null,
+    desconto_padrao_pct: Number($('mfDescontoPadrao').value) || 0,
   };
   if (!payload.ponto_venda){ showMsg('mfMsg','Preencha o ponto de venda.','err'); return; }
+  if (payload.desconto_padrao_pct < 0 || payload.desconto_padrao_pct > 100){ showMsg('mfMsg','Desconto padrão precisa estar entre 0 e 100%.','err'); return; }
 
   let error;
   if (id){
@@ -1044,13 +1062,28 @@ async function salvarVisita(){
 let efParcelasAtual = [];
 let efValorTotalAtual = 0;
 let efItensAtuais = [];
+let efValorBrutoAtual = 0;
+let efValorDescontoAtual = 0;
 
 async function abrirModalEfetivar(visitaId){
   $('efMsg').className = 'msg';
   $('efVisitaId').value = visitaId;
   $('efNumeroNota').value = '';
   $('efFormaPagamento').value = 'Boleto';
+  $('efDescontoMotivo').value = '';
+  $('efDescontoTipo').value = 'percentual';
+  $('efDescontoValor').value = '';
+  $('efDescontoInfo').textContent = '';
 
+  // Pré-preenche com o desconto comercial padrão do cliente, se houver
+  const { data: vis } = await sb.from('freezer_visitas').select('freezer_id, freezers(desconto_padrao_pct)').eq('id', visitaId).maybeSingle();
+  const descPadrao = Number(vis && vis.freezers ? vis.freezers.desconto_padrao_pct : 0) || 0;
+  if (descPadrao > 0){
+    $('efDescontoValor').value = descPadrao;
+    $('efDescontoInfo').textContent = 'Desconto padrão do cliente ('+descPadrao.toLocaleString('pt-BR')+'%) aplicado — ajuste se esta venda for diferente.';
+  }
+
+  efParcelasAtual = []; efValorTotalAtual = 0;
   const { data: itens, error } = await sb.from('freezer_visita_itens').select('id,produto_nome,quantidade,unidade,valor_unitario').eq('visita_id', visitaId).order('produto_nome');
   if (error){ alert('Erro ao carregar itens da venda: '+error.message); return; }
   efItensAtuais = (itens||[]).map(it => ({ id: it.id, produto_nome: it.produto_nome, quantidade: Number(it.quantidade), unidade: it.unidade, valor_unitario: Number(it.valor_unitario) }));
@@ -1073,9 +1106,30 @@ function renderEfItens(){
   recalcularEfValorTotal();
 }
 
-function recalcularEfValorTotal(){
-  efValorTotalAtual = efItensAtuais.reduce((s,it) => s + Number(it.quantidade)*Number(it.valor_unitario), 0);
-  $('efValorTotal').textContent = fmtMoeda(efValorTotalAtual);
+function recalcularEfValorTotal(redistribuir){
+  const totalAnterior = efValorTotalAtual;
+  efValorBrutoAtual = Math.round(efItensAtuais.reduce((s,it) => s + Number(it.quantidade)*Number(it.valor_unitario), 0) * 100) / 100;
+  const tipo = $('efDescontoTipo').value;
+  const informado = Math.max(0, Number($('efDescontoValor').value) || 0);
+  let desconto = tipo === 'percentual'
+    ? Math.round(efValorBrutoAtual * Math.min(informado, 100)) / 100
+    : Math.round(informado * 100) / 100;
+  if (desconto > efValorBrutoAtual) desconto = efValorBrutoAtual;
+  efValorDescontoAtual = desconto;
+  efValorTotalAtual = Math.round((efValorBrutoAtual - desconto) * 100) / 100;
+
+  $('efValorBruto').textContent = fmtMoeda(efValorBrutoAtual);
+  $('efValorTotal').textContent = fmtMoeda(efValorTotalAtual) + (desconto > 0 ? '  (desconto de '+fmtMoeda(desconto)+')' : '');
+
+  // Se o total mudou e as parcelas estavam fechando com o total anterior, redistribui automaticamente
+  if (efParcelasAtual.length && Math.abs(efValorTotalAtual - totalAnterior) > 0.001){
+    const soma = efParcelasAtual.reduce((s,p) => s + (Number(p.valor)||0), 0);
+    if (redistribuir || Math.abs(soma - totalAnterior) <= 0.01){
+      distribuirParcelasIgualmente();
+      renderParcelasEfetivar();
+      return;
+    }
+  }
   atualizarSomaParcelas();
 }
 
@@ -1119,10 +1173,10 @@ function atualizarSomaParcelas(){
   const el = $('efSomaParcelas');
   if (dif > 0.01){
     el.style.color = '#B43C3C';
-    el.textContent = 'Soma das parcelas ('+fmtMoeda(soma)+') não bate com o total da venda ('+fmtMoeda(efValorTotalAtual)+').';
+    el.textContent = 'Soma das parcelas ('+fmtMoeda(soma)+') não bate com o total a receber ('+fmtMoeda(efValorTotalAtual)+').';
   } else {
     el.style.color = '#2E7D32';
-    el.textContent = '✓ Soma das parcelas confere com o total da venda.';
+    el.textContent = '✓ Soma das parcelas confere com o total a receber.';
   }
 }
 
@@ -1137,6 +1191,14 @@ async function salvarEfetivacao(){
   }
   if (efItensAtuais.some(it => it.quantidade < 0 || it.valor_unitario < 0)){
     showMsg('efMsg','Quantidade e valor unitário não podem ser negativos.','err'); return;
+  }
+  const descTipo = $('efDescontoTipo').value;
+  const descInformado = Number($('efDescontoValor').value) || 0;
+  if (descInformado < 0 || (descTipo === 'percentual' && descInformado > 100) || (descTipo === 'valor' && descInformado > efValorBrutoAtual)){
+    showMsg('efMsg','Desconto inválido: não pode ser negativo, passar de 100% nem ser maior que o valor bruto.','err'); return;
+  }
+  if (efValorTotalAtual <= 0){
+    showMsg('efMsg','O total a receber precisa ser maior que zero.','err'); return;
   }
 
   const btn = $('btnSalvarEfetivar');
@@ -1160,6 +1222,9 @@ async function salvarEfetivacao(){
     p_numero_nota: $('efNumeroNota').value.trim() || null,
     p_forma_pagamento: $('efFormaPagamento').value,
     p_parcelas: efParcelasAtual.map(p => ({ valor: Number(p.valor), vencimento: p.vencimento })),
+    p_desconto_tipo: descInformado > 0 ? descTipo : null,
+    p_desconto_valor: descInformado > 0 ? descInformado : null,
+    p_desconto_motivo: $('efDescontoMotivo').value.trim() || null,
   };
   const { error } = await sb.rpc('efetivar_venda_freezer', payload);
   btn.disabled = false; btn.textContent = 'Confirmar Venda';
@@ -1256,6 +1321,10 @@ async function carregarHistorico(){
             (souBackoffice ? '<td><button class="btn-outline btn btn-sm" style="color:#B43C3C;border-color:#E9B9A9;padding:2px 8px" onclick="excluirItemVisita(\''+it.id+'\',\''+v.id+'\')" title="Excluir só este item (registrado por engano ou teste)">🗑</button></td>' : '')+
           '</tr>').join('')+
           '<tr><td colspan="4" style="text-align:right;font-weight:600">Total da visita</td><td style="font-weight:600">'+fmtMoeda(seusItens.reduce((s,it)=>s+it.quantidade*it.valor_unitario,0))+'</td>'+(souBackoffice?'<td></td>':'')+'</tr>'+
+          (v.status_venda === 'efetivada' && Number(v.valor_desconto) > 0
+            ? '<tr><td colspan="4" style="text-align:right;color:#B43C3C">Desconto comercial'+(v.desconto_tipo==='percentual' ? ' ('+Number(v.desconto_informado).toLocaleString('pt-BR')+'%)' : '')+(v.desconto_motivo ? ' — '+esc(v.desconto_motivo) : '')+'</td><td style="color:#B43C3C">− '+fmtMoeda(v.valor_desconto)+'</td>'+(souBackoffice?'<td></td>':'')+'</tr>'+
+              '<tr><td colspan="4" style="text-align:right;font-weight:700">Líquido a receber</td><td style="font-weight:700">'+fmtMoeda(v.valor_liquido)+'</td>'+(souBackoffice?'<td></td>':'')+'</tr>'
+            : '')+
         '</tbody></table></div>' : '')+
       '</div>'
     );
