@@ -180,7 +180,16 @@
       <div class="field" style="flex:1"><label>Código do cliente</label><input class="inp" id="mfCodigoCliente"></div>
       <div class="field" style="flex:1"><label>Nº de patrimônio (equipamento)</label><input class="inp" id="mfNumeroPatrimonio"></div>
       <div class="field" style="flex:1"><label>Rede (opcional)</label><input class="inp" id="mfRede"></div>
-      <div class="field" style="flex:1"><label>Qtd. de freezers no cliente</label><input class="inp" type="number" id="mfQtdFreezers" min="1" step="1" value="1"></div>
+    </div>
+    <div class="row">
+      <div class="field" style="flex:2"><label>Tipo de atendimento</label>
+        <select class="inp" id="mfModalidade" onchange="atualizarModalidadeFreezer()">
+          <option value="freezer_luna">Freezer nosso alocado no cliente</option>
+          <option value="freezer_cliente">Expõe em freezer próprio (PDV)</option>
+          <option value="sem_freezer">Sem freezer (compra caixas, ex: restaurante)</option>
+        </select>
+      </div>
+      <div class="field" style="flex:1"><label>Qtd. de freezers alocados</label><input class="inp" type="number" id="mfQtdFreezers" min="0" step="1" value="1"></div>
     </div>
     <div class="row">
       <div class="field" style="flex:2"><label>Endereço</label><input class="inp" id="mfEndereco"></div>
@@ -517,7 +526,7 @@ function renderFreezersLista(){
     '<div class="freezer-card">'+
       '<div>'+
         '<div class="fnome">'+esc(f.ponto_venda)+(f.rede?' <span style="font-size:.75rem;color:var(--text-light)">— '+esc(f.rede)+'</span>':'')+'</div>'+
-        '<div class="fdet">Código '+esc(f.codigo)+' · '+esc(f.cidade||'—')+' · Repositor: '+esc(f.repositor_nome||'—')+' · '+(f.qtd_freezers||1)+' freezer(s)</div>'+
+        '<div class="fdet">Código '+esc(f.codigo)+' · '+esc(f.cidade||'—')+' · Repositor: '+esc(f.repositor_nome||'—')+' · '+(f.modalidade==='freezer_cliente'?'Freezer do cliente':f.modalidade==='sem_freezer'?'Sem freezer (caixas)':(f.qtd_freezers==null?1:f.qtd_freezers)+' freezer(s)')+'</div>'+
         '<div style="margin-top:6px">'+badgeStatus(f.status)+'</div>'+
       '</div>'+
       '<div class="facoes">'+
@@ -754,7 +763,9 @@ async function abrirModalFreezer(id){
     $('mfCodigoCliente').value = f.codigo_cliente || '';
     $('mfNumeroPatrimonio').value = f.numero_patrimonio || '';
     $('mfRede').value = f.rede || '';
-    $('mfQtdFreezers').value = f.qtd_freezers || 1;
+    $('mfModalidade').value = f.modalidade || 'freezer_luna';
+    $('mfQtdFreezers').value = f.qtd_freezers == null ? 1 : f.qtd_freezers;
+    atualizarModalidadeFreezer();
     $('mfEndereco').value = f.endereco || '';
     $('mfCidade').value = f.cidade || '';
     $('mfStatus').value = f.status || 'ativo';
@@ -766,7 +777,9 @@ async function abrirModalFreezer(id){
     ['mfId','mfNomeFantasia','mfRazaoSocial','mfPontoVenda','mfNumeroLoja','mfCodigoCliente','mfNumeroPatrimonio','mfRede','mfEndereco','mfCidade','mfObs','mfDescontoPadrao'].forEach(id2 => $(id2).value = '');
     $('mfStatus').value = 'ativo';
     $('mfRepositor').value = '';
+    $('mfModalidade').value = 'freezer_luna';
     $('mfQtdFreezers').value = 1;
+    atualizarModalidadeFreezer();
   }
   $('modalFreezer').classList.add('show');
 }
@@ -790,7 +803,8 @@ async function salvarFreezer(){
     codigo_cliente: codigoCliente,
     numero_patrimonio: numeroPatrimonio,
     rede: $('mfRede').value.trim() || null,
-    qtd_freezers: parseInt($('mfQtdFreezers').value, 10) || 1,
+    modalidade: $('mfModalidade').value,
+    qtd_freezers: $('mfModalidade').value === 'freezer_luna' ? (parseInt($('mfQtdFreezers').value, 10) || 0) : 0,
     endereco: $('mfEndereco').value.trim() || null,
     cidade: $('mfCidade').value.trim() || null,
     status: $('mfStatus').value,
@@ -801,7 +815,7 @@ async function salvarFreezer(){
     desconto_padrao_pct: Number($('mfDescontoPadrao').value) || 0,
   };
   if (!payload.ponto_venda){ showMsg('mfMsg','Preencha o ponto de venda.','err'); return; }
-  if (payload.qtd_freezers < 1){ showMsg('mfMsg','A quantidade de freezers precisa ser pelo menos 1.','err'); return; }
+  if (payload.modalidade === 'freezer_luna' && payload.qtd_freezers < 1){ showMsg('mfMsg','Informe ao menos 1 freezer alocado (ou mude o tipo de atendimento).','err'); return; }
   if (payload.desconto_padrao_pct < 0 || payload.desconto_padrao_pct > 100){ showMsg('mfMsg','Desconto padrão precisa estar entre 0 e 100%.','err'); return; }
 
   let error;
@@ -817,6 +831,13 @@ async function salvarFreezer(){
   if (error){ showMsg('mfMsg', 'Erro: '+error.message, 'err'); return; }
   fecharModal('modalFreezer');
   await renderFreezers();
+}
+
+function atualizarModalidadeFreezer(){
+  const comFreezer = $('mfModalidade').value === 'freezer_luna';
+  $('mfQtdFreezers').disabled = !comFreezer;
+  if (!comFreezer) $('mfQtdFreezers').value = 0;
+  else if (!Number($('mfQtdFreezers').value)) $('mfQtdFreezers').value = 1;
 }
 
 function irParaVisita(freezerId){
