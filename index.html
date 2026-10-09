@@ -274,6 +274,10 @@
         </select>
       </div>
     </div>
+    <div class="field" style="margin-top:10px"><label>Tabela de preço aplicada aos itens</label>
+      <select class="inp" id="efTabelaPreco" onchange="trocarTabelaEfetivar(this.value)"></select>
+      <p class="hint" id="efTabelaInfo" style="margin:4px 0 0"></p>
+    </div>
     <h4 style="font-size:.9rem;margin-top:10px;margin-bottom:6px">Itens da proposta <span class="hint" style="margin:0;font-weight:400">(confira e corrija antes de efetivar, se precisar)</span></h4>
     <div id="efItensLista"></div>
     <button class="btn-outline btn btn-sm" onclick="adicionarItemEfetivar()">+ Adicionar item</button>
@@ -1065,6 +1069,36 @@ let efValorTotalAtual = 0;
 let efItensAtuais = [];
 let efValorBrutoAtual = 0;
 let efValorDescontoAtual = 0;
+let efTabelaAtualId = '';
+let efTabelaItensCache = {};
+
+// Preço de um item "avulso" (linha Yeez) numa tabela; sem tabela ou sem o produto nela, usa o preço padrão.
+// Para caixa, multiplica pelas unidades por caixa. Produtos da fábrica (produto_id) não mudam.
+function precoItemNaTabela(it, tabelaId){
+  if (!it.produto_avulso_id) return null;
+  const cat = produtosCache.find(p => p.produto_avulso_id === it.produto_avulso_id);
+  if (!cat) return null;
+  const daTabela = tabelaId && efTabelaItensCache[tabelaId] ? efTabelaItensCache[tabelaId][it.produto_avulso_id] : undefined;
+  const base = daTabela != null ? Number(daTabela) : Number(cat.preco_estimado);
+  return Math.round(base * (it.unidade === 'caixa' ? (cat.unidades_por_caixa || 1) : 1) * 100) / 100;
+}
+
+async function trocarTabelaEfetivar(tabelaId, aoAbrir){
+  efTabelaAtualId = tabelaId || '';
+  if (efTabelaAtualId && !efTabelaItensCache[efTabelaAtualId]){
+    const { data, error } = await sb.from('freezer_tabela_preco_itens').select('produto_simples_id,preco').eq('tabela_id', efTabelaAtualId);
+    if (error){ alert('Erro ao carregar a tabela de preço: '+error.message); return; }
+    efTabelaItensCache[efTabelaAtualId] = {};
+    (data||[]).forEach(r => { efTabelaItensCache[efTabelaAtualId][r.produto_simples_id] = r.preco; });
+  }
+  if (aoAbrir) return;
+  // Reprecifica os itens da linha Yeez com a tabela escolhida (o valor continua editável linha a linha)
+  efItensAtuais.forEach(it => {
+    const novo = precoItemNaTabela(it, efTabelaAtualId);
+    if (novo != null) it.valor_unitario = novo;
+  });
+  renderEfItens();
+}
 
 async function abrirModalEfetivar(visitaId){
   $('efMsg').className = 'msg';
@@ -1086,6 +1120,19 @@ async function abrirModalEfetivar(visitaId){
 
   efParcelasAtual = []; efValorTotalAtual = 0;
   await carregarProdutosFreezer();
+  // Tabela de preço: mostra a cadastrada no cliente e deixa trocar antes de efetivar
+  const { data: tabelas } = await sb.from('freezer_tabelas_preco').select('id,nome').eq('ativo', true).order('nome');
+  const { data: fz } = await sb.from('freezers').select('tabela_preco_id').eq('id', vis ? vis.freezer_id : null).maybeSingle();
+  const tabelaCliente = fz && fz.tabela_preco_id ? fz.tabela_preco_id : '';
+  const nomeTabelaCliente = (tabelas||[]).find(t => t.id === tabelaCliente);
+  efTabelaAtualId = tabelaCliente;
+  $('efTabelaPreco').innerHTML = '<option value="">Tabela padrão (sem tabela específica)</option>' +
+    (tabelas||[]).map(t => '<option value="'+t.id+'">'+esc(t.nome)+'</option>').join('');
+  $('efTabelaPreco').value = tabelaCliente;
+  $('efTabelaInfo').textContent = tabelaCliente
+    ? 'Cadastro do cliente: tabela "'+(nomeTabelaCliente ? nomeTabelaCliente.nome : '?')+'". Os valores abaixo foram calculados na hora do pedido; trocar a tabela recalcula os itens da linha Yeez.'
+    : 'Cliente sem tabela de preço cadastrada — os valores foram calculados pela tabela padrão. Se ele tem tabela própria, escolha-a aqui para recalcular os itens.';
+  await trocarTabelaEfetivar(tabelaCliente, true);
   const { data: itens, error } = await sb.from('freezer_visita_itens').select('id,produto_nome,quantidade,unidade,valor_unitario').eq('visita_id', visitaId).order('produto_nome');
   if (error){ alert('Erro ao carregar itens da venda: '+error.message); return; }
   efItensAtuais = (itens||[]).map(it => ({ id: it.id, produto_nome: it.produto_nome, quantidade: Number(it.quantidade), unidade: it.unidade, valor_unitario: Number(it.valor_unitario) }));
@@ -1104,7 +1151,7 @@ function renderEfItens(){
           '<input class="inp" type="text" autocomplete="off" id="efProdInput'+i+'" value="'+esc(it.produto_nome||'')+'" placeholder="Digite pra buscar…" oninput="filtrarItemEfetivar('+i+',this.value)" onfocus="abrirItemEfetivar('+i+')">'+
           '<div class="autocomplete-list" id="efProdDropdown'+i+'" style="display:none"></div></div>'+
         '<div class="field" style="max-width:100px"><label>Qtd</label><input class="inp" type="number" min="0.01" step="0.01" value="'+it.quantidade+'" onchange="efItensAtuais['+i+'].quantidade=Number(this.value)||0; recalcularEfValorTotal()"></div>'+
-        '<div class="field" style="max-width:90px"><label>Unidade</label><select class="inp" onchange="efItensAtuais['+i+'].unidade=this.value">'+
+        '<div class="field" style="max-width:90px"><label>Unidade</label><select class="inp" onchange="efItensAtuais['+i+'].unidade=this.value; (function(x){var n=precoItemNaTabela(x,efTabelaAtualId); if(n!=null) x.valor_unitario=n;})(efItensAtuais['+i+']); renderEfItens()">'+
           ['un','caixa'].map(u => '<option value="'+u+'" '+(it.unidade===u?'selected':'')+'>'+u+'</option>').join('')+'</select></div>'+
         '<div class="field" style="max-width:120px"><label>Valor unit.</label><input class="inp" type="number" min="0" step="0.01" value="'+it.valor_unitario+'" onchange="efItensAtuais['+i+'].valor_unitario=Number(this.value)||0; recalcularEfValorTotal()"></div>'+
         '<button class="btn-danger" onclick="removerItemEfetivar('+i+')">🗑️</button>'+
@@ -1154,7 +1201,8 @@ function selecionarItemEfetivar(i, idx){
   it.produto_id = item.produto_id;
   it.produto_avulso_id = item.produto_avulso_id;
   it.produto_nome = item.nome;
-  if (!Number(it.valor_unitario)) it.valor_unitario = item.preco_estimado || 0;
+  const precoTab = precoItemNaTabela(it, efTabelaAtualId);
+  it.valor_unitario = precoTab != null ? precoTab : (item.preco_estimado || 0);
   fecharTodosDropdownsProduto();
   renderEfItens();
 }
