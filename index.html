@@ -264,7 +264,7 @@
 <div class="modal-overlay" id="modalEfetivar">
   <div class="modal" style="max-width:560px">
     <h3>Efetivar Venda</h3>
-    <p class="hint" style="margin-bottom:12px">Informe as datas de vencimento — o número da NF pode ficar em branco por enquanto e ser preenchido depois no Recebíveis. Ao salvar, isso já entra automaticamente no controle de contas a receber.</p>
+    <p class="hint" style="margin-bottom:12px">O vencimento é definido no envio, direto no Recebíveis — aqui ele é opcional. O número da NF também pode ficar em branco por enquanto. Ao confirmar, a venda gera o contas a receber e uma ordem de envio para a Logística.</p>
     <input type="hidden" id="efVisitaId">
     <div class="row">
       <div class="field"><label>Número da NF (opcional por enquanto)</label><input class="inp" id="efNumeroNota" placeholder="Deixe em branco se ainda não tiver"></div>
@@ -294,7 +294,7 @@
     </div>
     <p class="hint" id="efDescontoInfo" style="margin:4px 0 0"></p>
     <p style="font-size:.9rem;margin:10px 0 4px"><strong>Total a receber (líquido): <span id="efValorTotal">R$ 0,00</span></strong></p>
-    <h4 style="font-size:.9rem;margin-top:14px;margin-bottom:6px">Parcelas / vencimentos</h4>
+    <h4 style="font-size:.9rem;margin-top:14px;margin-bottom:6px">Parcelas <span class="hint" style="margin:0;font-weight:400">(vencimento opcional — definido no envio, no Recebíveis)</span></h4>
     <div id="efParcelasLista"></div>
     <button class="btn-outline btn btn-sm" onclick="adicionarParcelaEfetivar()">+ Adicionar parcela</button>
     <p style="font-size:.8rem;margin-top:8px" id="efSomaParcelas"></p>
@@ -1239,7 +1239,7 @@ function renderParcelasEfetivar(){
   wrap.innerHTML = efParcelasAtual.map((p, i) =>
     '<div class="row" style="align-items:flex-end;margin-bottom:6px">'+
       '<div class="field" style="max-width:160px"><label>Valor</label><input class="inp" type="number" step="0.01" min="0" value="'+p.valor+'" onchange="efParcelasAtual['+i+'].valor=this.value; atualizarSomaParcelas()"></div>'+
-      '<div class="field"><label>Vencimento</label><input class="inp" type="date" value="'+p.vencimento+'" onchange="efParcelasAtual['+i+'].vencimento=this.value"></div>'+
+      '<div class="field"><label>Vencimento (opcional)</label><input class="inp" type="date" value="'+p.vencimento+'" onchange="efParcelasAtual['+i+'].vencimento=this.value"></div>'+
       (efParcelasAtual.length>1 ? '<button class="btn-danger" onclick="removerParcelaEfetivar('+i+')">🗑️</button>' : '')+
     '</div>'
   ).join('');
@@ -1287,9 +1287,6 @@ async function salvarEfetivacao(){
   if (Math.abs(soma - efValorTotalAtual) > 0.01){
     showMsg('efMsg','A soma das parcelas precisa bater com o total da venda antes de confirmar.','err'); return;
   }
-  if (efParcelasAtual.some(p => !p.vencimento)){
-    showMsg('efMsg','Preencha a data de vencimento de todas as parcelas.','err'); return;
-  }
   if (efItensAtuais.some(it => it.novo && !it.produto_id && !it.produto_avulso_id)){
     showMsg('efMsg','Escolha um produto válido da lista (digite e selecione uma sugestão) para cada item novo, ou remova a linha.','err'); return;
   }
@@ -1329,7 +1326,7 @@ async function salvarEfetivacao(){
     p_visita_id: visitaId,
     p_numero_nota: $('efNumeroNota').value.trim() || null,
     p_forma_pagamento: $('efFormaPagamento').value,
-    p_parcelas: efParcelasAtual.map(p => ({ valor: Number(p.valor), vencimento: p.vencimento })),
+    p_parcelas: efParcelasAtual.map(p => ({ valor: Number(p.valor), vencimento: p.vencimento || null })),
     p_desconto_tipo: descInformado > 0 ? descTipo : null,
     p_desconto_valor: descInformado > 0 ? descInformado : null,
     p_desconto_motivo: $('efDescontoMotivo').value.trim() || null,
