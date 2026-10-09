@@ -1133,9 +1133,9 @@ async function abrirModalEfetivar(visitaId){
     ? 'Cadastro do cliente: tabela "'+(nomeTabelaCliente ? nomeTabelaCliente.nome : '?')+'". Os valores abaixo foram calculados na hora do pedido; trocar a tabela recalcula os itens da linha Yeez.'
     : 'Cliente sem tabela de preço cadastrada — os valores foram calculados pela tabela padrão. Se ele tem tabela própria, escolha-a aqui para recalcular os itens.';
   await trocarTabelaEfetivar(tabelaCliente, true);
-  const { data: itens, error } = await sb.from('freezer_visita_itens').select('id,produto_nome,quantidade,unidade,valor_unitario').eq('visita_id', visitaId).order('produto_nome');
+  const { data: itens, error } = await sb.from('freezer_visita_itens').select('id,produto_id,produto_avulso_id,produto_nome,quantidade,unidade,valor_unitario').eq('visita_id', visitaId).order('produto_nome');
   if (error){ alert('Erro ao carregar itens da venda: '+error.message); return; }
-  efItensAtuais = (itens||[]).map(it => ({ id: it.id, produto_nome: it.produto_nome, quantidade: Number(it.quantidade), unidade: it.unidade, valor_unitario: Number(it.valor_unitario) }));
+  efItensAtuais = (itens||[]).map(it => ({ id: it.id, produto_id: it.produto_id, produto_avulso_id: it.produto_avulso_id, produto_nome: it.produto_nome, quantidade: Number(it.quantidade), unidade: it.unidade, valor_unitario: Number(it.valor_unitario) }));
   renderEfItens();
 
   efParcelasAtual = [{ valor: efValorTotalAtual.toFixed(2), vencimento: '' }];
