@@ -276,6 +276,7 @@
     </div>
     <h4 style="font-size:.9rem;margin-top:10px;margin-bottom:6px">Itens da proposta <span class="hint" style="margin:0;font-weight:400">(confira e corrija antes de efetivar, se precisar)</span></h4>
     <div id="efItensLista"></div>
+    <button class="btn-outline btn btn-sm" onclick="adicionarItemEfetivar()">+ Adicionar item</button>
     <p style="font-size:.85rem;margin:10px 0 4px">Valor bruto dos itens: <strong id="efValorBruto">R$ 0,00</strong></p>
     <h4 style="font-size:.9rem;margin-top:14px;margin-bottom:6px">Desconto comercial</h4>
     <div class="row" style="align-items:flex-end">
@@ -1084,6 +1085,7 @@ async function abrirModalEfetivar(visitaId){
   }
 
   efParcelasAtual = []; efValorTotalAtual = 0;
+  await carregarProdutosFreezer();
   const { data: itens, error } = await sb.from('freezer_visita_itens').select('id,produto_nome,quantidade,unidade,valor_unitario').eq('visita_id', visitaId).order('produto_nome');
   if (error){ alert('Erro ao carregar itens da venda: '+error.message); return; }
   efItensAtuais = (itens||[]).map(it => ({ id: it.id, produto_nome: it.produto_nome, quantidade: Number(it.quantidade), unidade: it.unidade, valor_unitario: Number(it.valor_unitario) }));
@@ -1096,14 +1098,65 @@ async function abrirModalEfetivar(visitaId){
 
 function renderEfItens(){
   const wrap = $('efItensLista');
-  wrap.innerHTML = efItensAtuais.map((it,i) =>
-    '<div class="row" style="align-items:flex-end;margin-bottom:6px">'+
-      '<div class="field" style="flex:1;min-width:140px"><label>Produto</label><input class="inp" value="'+esc(it.produto_nome)+'" disabled></div>'+
-      '<div class="field" style="max-width:100px"><label>Qtd'+(it.unidade?' ('+esc(it.unidade)+')':'')+'</label><input class="inp" type="number" min="0" step="0.01" value="'+it.quantidade+'" onchange="efItensAtuais['+i+'].quantidade=Number(this.value)||0; recalcularEfValorTotal()"></div>'+
-      '<div class="field" style="max-width:120px"><label>Valor unit.</label><input class="inp" type="number" min="0" step="0.01" value="'+it.valor_unitario+'" onchange="efItensAtuais['+i+'].valor_unitario=Number(this.value)||0; recalcularEfValorTotal()"></div>'+
-    '</div>'
+  wrap.innerHTML = efItensAtuais.map((it,i) => it.novo
+    ? '<div class="row" style="align-items:flex-end;margin-bottom:6px">'+
+        '<div class="field autocomplete-wrap" style="flex:1;min-width:140px"><label>Produto (novo)</label>'+
+          '<input class="inp" type="text" autocomplete="off" id="efProdInput'+i+'" value="'+esc(it.produto_nome||'')+'" placeholder="Digite pra buscar…" oninput="filtrarItemEfetivar('+i+',this.value)" onfocus="abrirItemEfetivar('+i+')">'+
+          '<div class="autocomplete-list" id="efProdDropdown'+i+'" style="display:none"></div></div>'+
+        '<div class="field" style="max-width:100px"><label>Qtd</label><input class="inp" type="number" min="0.01" step="0.01" value="'+it.quantidade+'" onchange="efItensAtuais['+i+'].quantidade=Number(this.value)||0; recalcularEfValorTotal()"></div>'+
+        '<div class="field" style="max-width:90px"><label>Unidade</label><select class="inp" onchange="efItensAtuais['+i+'].unidade=this.value">'+
+          ['un','caixa'].map(u => '<option value="'+u+'" '+(it.unidade===u?'selected':'')+'>'+u+'</option>').join('')+'</select></div>'+
+        '<div class="field" style="max-width:120px"><label>Valor unit.</label><input class="inp" type="number" min="0" step="0.01" value="'+it.valor_unitario+'" onchange="efItensAtuais['+i+'].valor_unitario=Number(this.value)||0; recalcularEfValorTotal()"></div>'+
+        '<button class="btn-danger" onclick="removerItemEfetivar('+i+')">🗑️</button>'+
+      '</div>'
+    : '<div class="row" style="align-items:flex-end;margin-bottom:6px">'+
+        '<div class="field" style="flex:1;min-width:140px"><label>Produto</label><input class="inp" value="'+esc(it.produto_nome)+'" disabled></div>'+
+        '<div class="field" style="max-width:100px"><label>Qtd'+(it.unidade?' ('+esc(it.unidade)+')':'')+'</label><input class="inp" type="number" min="0" step="0.01" value="'+it.quantidade+'" onchange="efItensAtuais['+i+'].quantidade=Number(this.value)||0; recalcularEfValorTotal()"></div>'+
+        '<div class="field" style="max-width:120px"><label>Valor unit.</label><input class="inp" type="number" min="0" step="0.01" value="'+it.valor_unitario+'" onchange="efItensAtuais['+i+'].valor_unitario=Number(this.value)||0; recalcularEfValorTotal()"></div>'+
+      '</div>'
   ).join('') || '<p class="hint">Nenhum item registrado nessa visita.</p>';
   recalcularEfValorTotal();
+}
+
+function adicionarItemEfetivar(){
+  if (!produtosCache || !produtosCache.length){ alert('Nenhum produto disponível.'); return; }
+  efItensAtuais.push({ novo: true, id: null, produto_id: null, produto_avulso_id: null, produto_nome: '', quantidade: 1, unidade: 'un', valor_unitario: 0 });
+  renderEfItens();
+}
+function removerItemEfetivar(i){
+  efItensAtuais.splice(i,1);
+  renderEfItens();
+}
+function montarDropdownEfetivarHTML(i, lista){
+  if (!lista.length) return '<div class="autocomplete-item autocomplete-empty">Nenhum produto encontrado.</div>';
+  return lista.map(p => '<div class="autocomplete-item" onmousedown="selecionarItemEfetivar('+i+','+produtosCache.indexOf(p)+')">'+esc(p.rotulo)+'</div>').join('');
+}
+function abrirItemEfetivar(i){
+  fecharTodosDropdownsProduto();
+  const dropEl = $('efProdDropdown'+i), inputEl = $('efProdInput'+i);
+  if (!dropEl) return;
+  dropEl.innerHTML = montarDropdownEfetivarHTML(i, listaProdutosFiltrada(inputEl ? inputEl.value : ''));
+  dropEl.style.display = 'block';
+}
+function filtrarItemEfetivar(i, texto){
+  efItensAtuais[i].produto_nome = texto;
+  efItensAtuais[i].produto_id = null;
+  efItensAtuais[i].produto_avulso_id = null;
+  const dropEl = $('efProdDropdown'+i);
+  if (!dropEl) return;
+  dropEl.innerHTML = montarDropdownEfetivarHTML(i, listaProdutosFiltrada(texto));
+  dropEl.style.display = 'block';
+}
+function selecionarItemEfetivar(i, idx){
+  const item = produtosCache[idx];
+  if (!item) return;
+  const it = efItensAtuais[i];
+  it.produto_id = item.produto_id;
+  it.produto_avulso_id = item.produto_avulso_id;
+  it.produto_nome = item.nome;
+  if (!Number(it.valor_unitario)) it.valor_unitario = item.preco_estimado || 0;
+  fecharTodosDropdownsProduto();
+  renderEfItens();
 }
 
 function recalcularEfValorTotal(redistribuir){
@@ -1189,6 +1242,12 @@ async function salvarEfetivacao(){
   if (efParcelasAtual.some(p => !p.vencimento)){
     showMsg('efMsg','Preencha a data de vencimento de todas as parcelas.','err'); return;
   }
+  if (efItensAtuais.some(it => it.novo && !it.produto_id && !it.produto_avulso_id)){
+    showMsg('efMsg','Escolha um produto válido da lista (digite e selecione uma sugestão) para cada item novo, ou remova a linha.','err'); return;
+  }
+  if (efItensAtuais.some(it => it.novo && !(it.quantidade > 0))){
+    showMsg('efMsg','A quantidade dos itens novos precisa ser maior que zero.','err'); return;
+  }
   if (efItensAtuais.some(it => it.quantidade < 0 || it.valor_unitario < 0)){
     showMsg('efMsg','Quantidade e valor unitário não podem ser negativos.','err'); return;
   }
@@ -1207,14 +1266,15 @@ async function salvarEfetivacao(){
   // Grava eventuais correções nos itens da proposta antes de efetivar — a
   // função de efetivação recalcula o total a partir dessas linhas.
   for (const it of efItensAtuais){
-    const { error: errItem } = await sb.from('freezer_visita_itens')
-      .update({ quantidade: it.quantidade, valor_unitario: it.valor_unitario })
-      .eq('id', it.id);
+    const { data: dadosItem, error: errItem } = it.novo
+      ? await sb.from('freezer_visita_itens').insert({ visita_id: visitaId, produto_id: it.produto_id, produto_avulso_id: it.produto_avulso_id, produto_nome: it.produto_nome, quantidade: it.quantidade, unidade: it.unidade, valor_unitario: it.valor_unitario }).select('id').single()
+      : await sb.from('freezer_visita_itens').update({ quantidade: it.quantidade, valor_unitario: it.valor_unitario }).eq('id', it.id);
     if (errItem){
       btn.disabled = false; btn.textContent = 'Confirmar Venda';
       showMsg('efMsg', 'Erro ao salvar item "'+it.produto_nome+'": '+errItem.message, 'err');
       return;
     }
+    if (it.novo){ it.novo = false; it.id = dadosItem.id; } // evita duplicar se a efetivação falhar e o usuário tentar de novo
   }
 
   const payload = {
