@@ -264,18 +264,23 @@
 <div class="modal-overlay" id="modalEfetivar">
   <div class="modal" style="max-width:560px">
     <h3>Efetivar Venda</h3>
-    <p class="hint" style="margin-bottom:12px">Informe as datas de vencimento — o número da NF pode ficar em branco por enquanto e ser preenchido depois no Recebíveis. Ao salvar, isso já entra automaticamente no controle de contas a receber.</p>
+    <p class="hint" style="margin-bottom:12px">Ao confirmar, a venda é encaminhada ao <strong>módulo de Logística</strong> para envio. O <strong>parcelamento e os vencimentos</strong> são definidos pela logística no momento da entrega (os prazos contam a partir dela), e só então o contas a receber é gerado. O número da NF pode ficar em branco e ser preenchido depois.</p>
     <input type="hidden" id="efVisitaId">
     <div class="row">
       <div class="field"><label>Número da NF (opcional por enquanto)</label><input class="inp" id="efNumeroNota" placeholder="Deixe em branco se ainda não tiver"></div>
-      <div class="field"><label>Forma de pagamento</label>
+      <div class="field"><label>Forma de pagamento (prevista)</label>
         <select class="inp" id="efFormaPagamento">
           <option>Boleto</option><option>PIX</option><option>Cartão</option><option>Dinheiro</option>
         </select>
       </div>
     </div>
+    <div class="field" style="margin-top:10px"><label>Tabela de preço aplicada aos itens</label>
+      <select class="inp" id="efTabelaPreco" onchange="trocarTabelaEfetivar(this.value)"></select>
+      <p class="hint" id="efTabelaInfo" style="margin:4px 0 0"></p>
+    </div>
     <h4 style="font-size:.9rem;margin-top:10px;margin-bottom:6px">Itens da proposta <span class="hint" style="margin:0;font-weight:400">(confira e corrija antes de efetivar, se precisar)</span></h4>
     <div id="efItensLista"></div>
+    <button class="btn-outline btn btn-sm" onclick="adicionarItemEfetivar()">+ Adicionar item</button>
     <p style="font-size:.85rem;margin:10px 0 4px">Valor bruto dos itens: <strong id="efValorBruto">R$ 0,00</strong></p>
     <h4 style="font-size:.9rem;margin-top:14px;margin-bottom:6px">Desconto comercial</h4>
     <div class="row" style="align-items:flex-end">
@@ -289,13 +294,10 @@
     </div>
     <p class="hint" id="efDescontoInfo" style="margin:4px 0 0"></p>
     <p style="font-size:.9rem;margin:10px 0 4px"><strong>Total a receber (líquido): <span id="efValorTotal">R$ 0,00</span></strong></p>
-    <h4 style="font-size:.9rem;margin-top:14px;margin-bottom:6px">Parcelas / vencimentos</h4>
-    <div id="efParcelasLista"></div>
-    <button class="btn-outline btn btn-sm" onclick="adicionarParcelaEfetivar()">+ Adicionar parcela</button>
-    <p style="font-size:.8rem;margin-top:8px" id="efSomaParcelas"></p>
+    <p class="hint" style="margin-top:12px">📦 Parcelas e vencimentos: definidos na Logística, no envio.</p>
     <div class="modal-actions" style="margin-top:16px">
       <button class="btn-outline btn" onclick="fecharModal('modalEfetivar')">Cancelar</button>
-      <button class="btn" id="btnSalvarEfetivar" onclick="salvarEfetivacao()">Confirmar Venda</button>
+      <button class="btn" id="btnSalvarEfetivar" onclick="salvarEfetivacao()">Confirmar e enviar p/ Logística</button>
     </div>
     <div class="msg" id="efMsg"></div>
   </div>
@@ -1059,11 +1061,40 @@ async function salvarVisita(){
   setTimeout(() => mudarTab('visita'), 1200);
 }
 
-let efParcelasAtual = [];
 let efValorTotalAtual = 0;
 let efItensAtuais = [];
 let efValorBrutoAtual = 0;
 let efValorDescontoAtual = 0;
+let efTabelaAtualId = '';
+let efTabelaItensCache = {};
+
+// Preço de um item "avulso" (linha Yeez) numa tabela; sem tabela ou sem o produto nela, usa o preço padrão.
+// Para caixa, multiplica pelas unidades por caixa. Produtos da fábrica (produto_id) não mudam.
+function precoItemNaTabela(it, tabelaId){
+  if (!it.produto_avulso_id) return null;
+  const cat = produtosCache.find(p => p.produto_avulso_id === it.produto_avulso_id);
+  if (!cat) return null;
+  const daTabela = tabelaId && efTabelaItensCache[tabelaId] ? efTabelaItensCache[tabelaId][it.produto_avulso_id] : undefined;
+  const base = daTabela != null ? Number(daTabela) : Number(cat.preco_estimado);
+  return Math.round(base * (it.unidade === 'caixa' ? (cat.unidades_por_caixa || 1) : 1) * 100) / 100;
+}
+
+async function trocarTabelaEfetivar(tabelaId, aoAbrir){
+  efTabelaAtualId = tabelaId || '';
+  if (efTabelaAtualId && !efTabelaItensCache[efTabelaAtualId]){
+    const { data, error } = await sb.from('freezer_tabela_preco_itens').select('produto_simples_id,preco').eq('tabela_id', efTabelaAtualId);
+    if (error){ alert('Erro ao carregar a tabela de preço: '+error.message); return; }
+    efTabelaItensCache[efTabelaAtualId] = {};
+    (data||[]).forEach(r => { efTabelaItensCache[efTabelaAtualId][r.produto_simples_id] = r.preco; });
+  }
+  if (aoAbrir) return;
+  // Reprecifica os itens da linha Yeez com a tabela escolhida (o valor continua editável linha a linha)
+  efItensAtuais.forEach(it => {
+    const novo = precoItemNaTabela(it, efTabelaAtualId);
+    if (novo != null) it.valor_unitario = novo;
+  });
+  renderEfItens();
+}
 
 async function abrirModalEfetivar(visitaId){
   $('efMsg').className = 'msg';
@@ -1083,27 +1114,91 @@ async function abrirModalEfetivar(visitaId){
     $('efDescontoInfo').textContent = 'Desconto padrão do cliente ('+descPadrao.toLocaleString('pt-BR')+'%) aplicado — ajuste se esta venda for diferente.';
   }
 
-  efParcelasAtual = []; efValorTotalAtual = 0;
-  const { data: itens, error } = await sb.from('freezer_visita_itens').select('id,produto_nome,quantidade,unidade,valor_unitario').eq('visita_id', visitaId).order('produto_nome');
+  efValorTotalAtual = 0;
+  await carregarProdutosFreezer();
+  // Tabela de preço: mostra a cadastrada no cliente e deixa trocar antes de efetivar
+  const { data: tabelas } = await sb.from('freezer_tabelas_preco').select('id,nome').eq('ativo', true).order('nome');
+  const { data: fz } = await sb.from('freezers').select('tabela_preco_id').eq('id', vis ? vis.freezer_id : null).maybeSingle();
+  const tabelaCliente = fz && fz.tabela_preco_id ? fz.tabela_preco_id : '';
+  const nomeTabelaCliente = (tabelas||[]).find(t => t.id === tabelaCliente);
+  efTabelaAtualId = tabelaCliente;
+  $('efTabelaPreco').innerHTML = '<option value="">Tabela padrão (sem tabela específica)</option>' +
+    (tabelas||[]).map(t => '<option value="'+t.id+'">'+esc(t.nome)+'</option>').join('');
+  $('efTabelaPreco').value = tabelaCliente;
+  $('efTabelaInfo').textContent = tabelaCliente
+    ? 'Cadastro do cliente: tabela "'+(nomeTabelaCliente ? nomeTabelaCliente.nome : '?')+'". Os valores abaixo foram calculados na hora do pedido; trocar a tabela recalcula os itens da linha Yeez.'
+    : 'Cliente sem tabela de preço cadastrada — os valores foram calculados pela tabela padrão. Se ele tem tabela própria, escolha-a aqui para recalcular os itens.';
+  await trocarTabelaEfetivar(tabelaCliente, true);
+  const { data: itens, error } = await sb.from('freezer_visita_itens').select('id,produto_id,produto_avulso_id,produto_nome,quantidade,unidade,valor_unitario').eq('visita_id', visitaId).order('produto_nome');
   if (error){ alert('Erro ao carregar itens da venda: '+error.message); return; }
-  efItensAtuais = (itens||[]).map(it => ({ id: it.id, produto_nome: it.produto_nome, quantidade: Number(it.quantidade), unidade: it.unidade, valor_unitario: Number(it.valor_unitario) }));
+  efItensAtuais = (itens||[]).map(it => ({ id: it.id, produto_id: it.produto_id, produto_avulso_id: it.produto_avulso_id, produto_nome: it.produto_nome, quantidade: Number(it.quantidade), unidade: it.unidade, valor_unitario: Number(it.valor_unitario) }));
   renderEfItens();
 
-  efParcelasAtual = [{ valor: efValorTotalAtual.toFixed(2), vencimento: '' }];
-  renderParcelasEfetivar();
   $('modalEfetivar').classList.add('show');
 }
 
 function renderEfItens(){
   const wrap = $('efItensLista');
-  wrap.innerHTML = efItensAtuais.map((it,i) =>
-    '<div class="row" style="align-items:flex-end;margin-bottom:6px">'+
-      '<div class="field" style="flex:1;min-width:140px"><label>Produto</label><input class="inp" value="'+esc(it.produto_nome)+'" disabled></div>'+
-      '<div class="field" style="max-width:100px"><label>Qtd'+(it.unidade?' ('+esc(it.unidade)+')':'')+'</label><input class="inp" type="number" min="0" step="0.01" value="'+it.quantidade+'" onchange="efItensAtuais['+i+'].quantidade=Number(this.value)||0; recalcularEfValorTotal()"></div>'+
-      '<div class="field" style="max-width:120px"><label>Valor unit.</label><input class="inp" type="number" min="0" step="0.01" value="'+it.valor_unitario+'" onchange="efItensAtuais['+i+'].valor_unitario=Number(this.value)||0; recalcularEfValorTotal()"></div>'+
-    '</div>'
+  wrap.innerHTML = efItensAtuais.map((it,i) => it.novo
+    ? '<div class="row" style="align-items:flex-end;margin-bottom:6px">'+
+        '<div class="field autocomplete-wrap" style="flex:1;min-width:140px"><label>Produto (novo)</label>'+
+          '<input class="inp" type="text" autocomplete="off" id="efProdInput'+i+'" value="'+esc(it.produto_nome||'')+'" placeholder="Digite pra buscar…" oninput="filtrarItemEfetivar('+i+',this.value)" onfocus="abrirItemEfetivar('+i+')">'+
+          '<div class="autocomplete-list" id="efProdDropdown'+i+'" style="display:none"></div></div>'+
+        '<div class="field" style="max-width:100px"><label>Qtd</label><input class="inp" type="number" min="0.01" step="0.01" value="'+it.quantidade+'" onchange="efItensAtuais['+i+'].quantidade=Number(this.value)||0; recalcularEfValorTotal()"></div>'+
+        '<div class="field" style="max-width:90px"><label>Unidade</label><select class="inp" onchange="efItensAtuais['+i+'].unidade=this.value; (function(x){var n=precoItemNaTabela(x,efTabelaAtualId); if(n!=null) x.valor_unitario=n;})(efItensAtuais['+i+']); renderEfItens()">'+
+          ['un','caixa'].map(u => '<option value="'+u+'" '+(it.unidade===u?'selected':'')+'>'+u+'</option>').join('')+'</select></div>'+
+        '<div class="field" style="max-width:120px"><label>Valor unit.</label><input class="inp" type="number" min="0" step="0.01" value="'+it.valor_unitario+'" onchange="efItensAtuais['+i+'].valor_unitario=Number(this.value)||0; recalcularEfValorTotal()"></div>'+
+        '<button class="btn-danger" onclick="removerItemEfetivar('+i+')">🗑️</button>'+
+      '</div>'
+    : '<div class="row" style="align-items:flex-end;margin-bottom:6px">'+
+        '<div class="field" style="flex:1;min-width:140px"><label>Produto</label><input class="inp" value="'+esc(it.produto_nome)+'" disabled></div>'+
+        '<div class="field" style="max-width:100px"><label>Qtd'+(it.unidade?' ('+esc(it.unidade)+')':'')+'</label><input class="inp" type="number" min="0" step="0.01" value="'+it.quantidade+'" onchange="efItensAtuais['+i+'].quantidade=Number(this.value)||0; recalcularEfValorTotal()"></div>'+
+        '<div class="field" style="max-width:120px"><label>Valor unit.</label><input class="inp" type="number" min="0" step="0.01" value="'+it.valor_unitario+'" onchange="efItensAtuais['+i+'].valor_unitario=Number(this.value)||0; recalcularEfValorTotal()"></div>'+
+      '</div>'
   ).join('') || '<p class="hint">Nenhum item registrado nessa visita.</p>';
   recalcularEfValorTotal();
+}
+
+function adicionarItemEfetivar(){
+  if (!produtosCache || !produtosCache.length){ alert('Nenhum produto disponível.'); return; }
+  efItensAtuais.push({ novo: true, id: null, produto_id: null, produto_avulso_id: null, produto_nome: '', quantidade: 1, unidade: 'un', valor_unitario: 0 });
+  renderEfItens();
+}
+function removerItemEfetivar(i){
+  efItensAtuais.splice(i,1);
+  renderEfItens();
+}
+function montarDropdownEfetivarHTML(i, lista){
+  if (!lista.length) return '<div class="autocomplete-item autocomplete-empty">Nenhum produto encontrado.</div>';
+  return lista.map(p => '<div class="autocomplete-item" onmousedown="selecionarItemEfetivar('+i+','+produtosCache.indexOf(p)+')">'+esc(p.rotulo)+'</div>').join('');
+}
+function abrirItemEfetivar(i){
+  fecharTodosDropdownsProduto();
+  const dropEl = $('efProdDropdown'+i), inputEl = $('efProdInput'+i);
+  if (!dropEl) return;
+  dropEl.innerHTML = montarDropdownEfetivarHTML(i, listaProdutosFiltrada(inputEl ? inputEl.value : ''));
+  dropEl.style.display = 'block';
+}
+function filtrarItemEfetivar(i, texto){
+  efItensAtuais[i].produto_nome = texto;
+  efItensAtuais[i].produto_id = null;
+  efItensAtuais[i].produto_avulso_id = null;
+  const dropEl = $('efProdDropdown'+i);
+  if (!dropEl) return;
+  dropEl.innerHTML = montarDropdownEfetivarHTML(i, listaProdutosFiltrada(texto));
+  dropEl.style.display = 'block';
+}
+function selecionarItemEfetivar(i, idx){
+  const item = produtosCache[idx];
+  if (!item) return;
+  const it = efItensAtuais[i];
+  it.produto_id = item.produto_id;
+  it.produto_avulso_id = item.produto_avulso_id;
+  it.produto_nome = item.nome;
+  const precoTab = precoItemNaTabela(it, efTabelaAtualId);
+  it.valor_unitario = precoTab != null ? precoTab : (item.preco_estimado || 0);
+  fecharTodosDropdownsProduto();
+  renderEfItens();
 }
 
 function recalcularEfValorTotal(redistribuir){
@@ -1120,74 +1215,15 @@ function recalcularEfValorTotal(redistribuir){
 
   $('efValorBruto').textContent = fmtMoeda(efValorBrutoAtual);
   $('efValorTotal').textContent = fmtMoeda(efValorTotalAtual) + (desconto > 0 ? '  (desconto de '+fmtMoeda(desconto)+')' : '');
-
-  // Se o total mudou e as parcelas estavam fechando com o total anterior, redistribui automaticamente
-  if (efParcelasAtual.length && Math.abs(efValorTotalAtual - totalAnterior) > 0.001){
-    const soma = efParcelasAtual.reduce((s,p) => s + (Number(p.valor)||0), 0);
-    if (redistribuir || Math.abs(soma - totalAnterior) <= 0.01){
-      distribuirParcelasIgualmente();
-      renderParcelasEfetivar();
-      return;
-    }
-  }
-  atualizarSomaParcelas();
-}
-
-function renderParcelasEfetivar(){
-  const wrap = $('efParcelasLista');
-  wrap.innerHTML = efParcelasAtual.map((p, i) =>
-    '<div class="row" style="align-items:flex-end;margin-bottom:6px">'+
-      '<div class="field" style="max-width:160px"><label>Valor</label><input class="inp" type="number" step="0.01" min="0" value="'+p.valor+'" onchange="efParcelasAtual['+i+'].valor=this.value; atualizarSomaParcelas()"></div>'+
-      '<div class="field"><label>Vencimento</label><input class="inp" type="date" value="'+p.vencimento+'" onchange="efParcelasAtual['+i+'].vencimento=this.value"></div>'+
-      (efParcelasAtual.length>1 ? '<button class="btn-danger" onclick="removerParcelaEfetivar('+i+')">🗑️</button>' : '')+
-    '</div>'
-  ).join('');
-  atualizarSomaParcelas();
-}
-
-function adicionarParcelaEfetivar(){
-  efParcelasAtual.push({ valor:'0.00', vencimento:'' });
-  distribuirParcelasIgualmente();
-  renderParcelasEfetivar();
-}
-function removerParcelaEfetivar(i){
-  efParcelasAtual.splice(i,1);
-  distribuirParcelasIgualmente();
-  renderParcelasEfetivar();
-}
-function distribuirParcelasIgualmente(){
-  const n = efParcelasAtual.length;
-  if (!n) return;
-  // Divide em centavos pra nunca sobrar/faltar por arredondamento; o resto (poucos centavos) vai pras primeiras parcelas.
-  const totalCentavos = Math.round(efValorTotalAtual * 100);
-  const baseCentavos = Math.floor(totalCentavos / n);
-  const resto = totalCentavos - (baseCentavos * n);
-  efParcelasAtual.forEach((p, i) => {
-    const centavos = baseCentavos + (i < resto ? 1 : 0);
-    p.valor = (centavos / 100).toFixed(2);
-  });
-}
-function atualizarSomaParcelas(){
-  const soma = efParcelasAtual.reduce((s,p) => s + (Number(p.valor)||0), 0);
-  const dif = Math.abs(soma - efValorTotalAtual);
-  const el = $('efSomaParcelas');
-  if (dif > 0.01){
-    el.style.color = '#B43C3C';
-    el.textContent = 'Soma das parcelas ('+fmtMoeda(soma)+') não bate com o total a receber ('+fmtMoeda(efValorTotalAtual)+').';
-  } else {
-    el.style.color = '#2E7D32';
-    el.textContent = '✓ Soma das parcelas confere com o total a receber.';
-  }
 }
 
 async function salvarEfetivacao(){
   const visitaId = $('efVisitaId').value;
-  const soma = efParcelasAtual.reduce((s,p) => s + (Number(p.valor)||0), 0);
-  if (Math.abs(soma - efValorTotalAtual) > 0.01){
-    showMsg('efMsg','A soma das parcelas precisa bater com o total da venda antes de confirmar.','err'); return;
+  if (efItensAtuais.some(it => it.novo && !it.produto_id && !it.produto_avulso_id)){
+    showMsg('efMsg','Escolha um produto válido da lista (digite e selecione uma sugestão) para cada item novo, ou remova a linha.','err'); return;
   }
-  if (efParcelasAtual.some(p => !p.vencimento)){
-    showMsg('efMsg','Preencha a data de vencimento de todas as parcelas.','err'); return;
+  if (efItensAtuais.some(it => it.novo && !(it.quantidade > 0))){
+    showMsg('efMsg','A quantidade dos itens novos precisa ser maior que zero.','err'); return;
   }
   if (efItensAtuais.some(it => it.quantidade < 0 || it.valor_unitario < 0)){
     showMsg('efMsg','Quantidade e valor unitário não podem ser negativos.','err'); return;
@@ -1207,27 +1243,28 @@ async function salvarEfetivacao(){
   // Grava eventuais correções nos itens da proposta antes de efetivar — a
   // função de efetivação recalcula o total a partir dessas linhas.
   for (const it of efItensAtuais){
-    const { error: errItem } = await sb.from('freezer_visita_itens')
-      .update({ quantidade: it.quantidade, valor_unitario: it.valor_unitario })
-      .eq('id', it.id);
+    const { data: dadosItem, error: errItem } = it.novo
+      ? await sb.from('freezer_visita_itens').insert({ visita_id: visitaId, produto_id: it.produto_id, produto_avulso_id: it.produto_avulso_id, produto_nome: it.produto_nome, quantidade: it.quantidade, unidade: it.unidade, valor_unitario: it.valor_unitario }).select('id').single()
+      : await sb.from('freezer_visita_itens').update({ quantidade: it.quantidade, valor_unitario: it.valor_unitario }).eq('id', it.id);
     if (errItem){
-      btn.disabled = false; btn.textContent = 'Confirmar Venda';
+      btn.disabled = false; btn.textContent = 'Confirmar e enviar p/ Logística';
       showMsg('efMsg', 'Erro ao salvar item "'+it.produto_nome+'": '+errItem.message, 'err');
       return;
     }
+    if (it.novo){ it.novo = false; it.id = dadosItem.id; } // evita duplicar se a efetivação falhar e o usuário tentar de novo
   }
 
   const payload = {
     p_visita_id: visitaId,
     p_numero_nota: $('efNumeroNota').value.trim() || null,
     p_forma_pagamento: $('efFormaPagamento').value,
-    p_parcelas: efParcelasAtual.map(p => ({ valor: Number(p.valor), vencimento: p.vencimento })),
+    p_parcelas: null, // parcelamento é definido na Logística, no envio
     p_desconto_tipo: descInformado > 0 ? descTipo : null,
     p_desconto_valor: descInformado > 0 ? descInformado : null,
     p_desconto_motivo: $('efDescontoMotivo').value.trim() || null,
   };
   const { error } = await sb.rpc('efetivar_venda_freezer', payload);
-  btn.disabled = false; btn.textContent = 'Confirmar Venda';
+  btn.disabled = false; btn.textContent = 'Confirmar e enviar p/ Logística';
   if (error){ showMsg('efMsg', 'Erro: '+error.message, 'err'); return; }
 
   fecharModal('modalEfetivar');
@@ -1299,7 +1336,9 @@ async function carregarHistorico(){
           '<div style="display:flex;gap:6px">'+
             (v.pedido_tirado ? (
               v.status_venda === 'efetivada'
-                ? '<span class="flag-pill on" style="background:#E7F3E8;color:#2E7D32;font-weight:600">✅ Venda efetivada'+(v.numero_nota ? ' — NF '+esc(v.numero_nota) : ' — aguardando NF')+'</span>'
+                ? '<span class="flag-pill on" style="background:#E7F3E8;color:#2E7D32;font-weight:600">✅ Venda efetivada'+(v.numero_nota ? ' — NF '+esc(v.numero_nota) : ' — aguardando NF')+'</span>'+
+                  (v.data_envio ? '<span class="flag-pill on" style="background:#E8EAF6;color:#3949AB;font-weight:600">🚚 Enviada em '+fmtData(v.data_envio)+'</span>'
+                    : (v.parcelas ? '' : '<span class="flag-pill" style="background:#FDF3E0;color:#B8860B;font-weight:600">⏳ Aguardando envio pela Logística</span>'))
                 : '<button class="btn btn-sm" style="background:#B8860B" onclick="abrirModalEfetivar(\''+v.id+'\')">📝 Efetivar venda</button>'
             ) : '')+
             '<button class="btn-outline btn btn-sm" onclick="verFotosVisita(\''+v.freezer_id+'\',\''+v.id+'\')">📷 Ver fotos</button>'+
