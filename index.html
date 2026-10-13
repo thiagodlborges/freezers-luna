@@ -1463,16 +1463,20 @@ function mesLabelPtBr(dataYYYYMM01){
 
 async function renderPainel(){
   $('mainContent').innerHTML = '<div class="loading">Carregando…</div>';
-  const hoje = new Date();
-  const inicio30 = new Date(hoje.getTime() - 30*86400000).toISOString().slice(0,10);
-  const fim = hoje.toISOString().slice(0,10);
-  const primeiroDiaMes = fim.slice(0,7)+'-01';
-  painelMesAtual = primeiroDiaMes;
+  const hojeStr = new Date().toISOString().slice(0,10);
+  if (!painelMesAtual) painelMesAtual = hojeStr.slice(0,7)+'-01';
+  const [anoSel, mesSel] = painelMesAtual.split('-').map(Number);
+  const ehMesAtual = painelMesAtual.slice(0,7) === hojeStr.slice(0,7);
+  // mês corrente vai até hoje; mês passado/futuro vai até o último dia do mês escolhido
+  const fim = ehMesAtual ? hojeStr : new Date(Date.UTC(anoSel, mesSel, 0)).toISOString().slice(0,10);
+  const inicio = painelMesAtual;
+  const primeiroDiaMes = painelMesAtual;
+  const mesLabel = mesLabelPtBr(painelMesAtual);
   painelFimAtual = fim;
 
   const [serieR, rankingR, semVisitaR, riscoR] = await Promise.all([
-    sb.rpc('freezer_dashboard_serie_temporal', { p_data_inicio: inicio30, p_data_fim: fim }),
-    sb.rpc('freezer_dashboard_ranking_produtos', { p_data_inicio: inicio30, p_data_fim: fim }),
+    sb.rpc('freezer_dashboard_serie_temporal', { p_data_inicio: inicio, p_data_fim: fim }),
+    sb.rpc('freezer_dashboard_ranking_produtos', { p_data_inicio: inicio, p_data_fim: fim }),
     sb.rpc('freezer_dashboard_sem_visita'),
     sb.rpc('freezer_dashboard_risco_falha'),
   ]);
@@ -1484,11 +1488,9 @@ async function renderPainel(){
   const semVisita = (semVisitaR.data || []).slice(0, 10);
   const risco = riscoR.data || [];
 
-  const totalVisitas30d = serie.reduce((s,d) => s + Number(d.qtd_visitas||0), 0);
-  const totalProposta30d = serie.reduce((s,d) => s + Number(d.valor_proposta||0), 0);
-  const totalEfetivada30d = serie.reduce((s,d) => s + Number(d.valor_efetivada||0), 0);
-  const data7diasAtras = new Date(hoje.getTime() - 6*86400000).toISOString().slice(0,10); // hoje + 6 dias anteriores = últimos 7 dias
-  const totalVisitas7d = serie.filter(d => d.dia >= data7diasAtras).reduce((s,d) => s + Number(d.qtd_visitas||0), 0);
+  const totalVisitasMes = serie.reduce((s,d) => s + Number(d.qtd_visitas||0), 0);
+  const totalPropostaMes = serie.reduce((s,d) => s + Number(d.valor_proposta||0), 0);
+  const totalEfetivadaMes = serie.reduce((s,d) => s + Number(d.valor_efetivada||0), 0);
 
   let seletorRepositorMeta = '';
   if (souBackoffice){
@@ -1500,29 +1502,31 @@ async function renderPainel(){
   }
 
   $('mainContent').innerHTML =
-    (!souBackoffice ? '<p class="hint" style="margin-bottom:14px">Mostrando só os números da sua carteira de freezers.</p>' : '')+
+    '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px">'+
+      '<label style="font-weight:600;font-size:.85rem">Mês</label>'+
+      '<input class="inp" type="month" id="painelMesInput" value="'+primeiroDiaMes.slice(0,7)+'" style="max-width:150px" onchange="painelMudarMes()">'+
+      (!souBackoffice ? '<span class="hint" style="margin:0">Mostrando só os números da sua carteira de freezers.</span>' : '')+
+    '</div>'+
     '<div class="stat-box">'+
-      '<div class="stat"><div class="num">'+totalVisitas7d+'</div><div class="lbl">Visitas nos últimos 7 dias</div></div>'+
-      '<div class="stat"><div class="num">'+totalVisitas30d+'</div><div class="lbl">Visitas nos últimos 30 dias</div></div>'+
-      '<div class="stat"><div class="num" style="color:#D9B96A">'+fmtMoeda(totalProposta30d)+'</div><div class="lbl">Proposta (30 dias)</div></div>'+
-      '<div class="stat"><div class="num" style="color:#6B1E2E">'+fmtMoeda(totalEfetivada30d)+'</div><div class="lbl">Efetivada (30 dias)</div></div>'+
+      '<div class="stat"><div class="num">'+totalVisitasMes+'</div><div class="lbl">Visitas em '+mesLabel+'</div></div>'+
+      '<div class="stat"><div class="num" style="color:#D9B96A">'+fmtMoeda(totalPropostaMes)+'</div><div class="lbl">Proposta ('+mesLabel+')</div></div>'+
+      '<div class="stat"><div class="num" style="color:#6B1E2E">'+fmtMoeda(totalEfetivadaMes)+'</div><div class="lbl">Efetivada ('+mesLabel+')</div></div>'+
       '<div class="stat"><div class="num" style="color:'+(risco.length?'#B43C3C':'#2E7D32')+'">'+risco.length+'</div><div class="lbl">Freezers com risco de falha</div></div>'+
     '</div>'+
     '<div class="card">'+
       '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">'+
         '<h2 style="margin:0;font-size:.95rem">🎯 Meta do Mês</h2>'+
         '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">'+
-          '<input class="inp" type="month" id="painelMetaMesInput" value="'+primeiroDiaMes.slice(0,7)+'" style="max-width:150px" onchange="painelMudarMes()">'+
           seletorRepositorMeta+
         '</div>'+
       '</div>'+
       '<div id="painelMetaConteudo" style="margin-top:12px"><div class="loading">Carregando…</div></div>'+
     '</div>'+
     '<div class="row" style="gap:16px;align-items:stretch">'+
-      '<div class="card" style="flex:1;min-width:260px"><h2 style="font-size:.95rem">Visitas por dia (30 dias)</h2><div style="height:140px"><canvas id="chartVisitas"></canvas></div></div>'+
-      '<div class="card" style="flex:1;min-width:260px"><h2 style="font-size:.95rem">Valor de pedidos por dia — Proposta × Efetivada (30 dias)</h2><div style="height:140px"><canvas id="chartVendas"></canvas></div></div>'+
+      '<div class="card" style="flex:1;min-width:260px"><h2 style="font-size:.95rem">Visitas por dia ('+mesLabel+')</h2><div style="height:140px"><canvas id="chartVisitas"></canvas></div></div>'+
+      '<div class="card" style="flex:1;min-width:260px"><h2 style="font-size:.95rem">Valor de pedidos por dia — Proposta × Efetivada ('+mesLabel+')</h2><div style="height:140px"><canvas id="chartVendas"></canvas></div></div>'+
     '</div>'+
-    '<div class="card"><h2 style="font-size:.95rem">Ranking — produtos mais pedidos (30 dias)</h2>'+
+    '<div class="card"><h2 style="font-size:.95rem">Ranking — produtos mais pedidos ('+mesLabel+')</h2>'+
       (ranking.length ? '<div style="height:'+Math.max(90, ranking.length*22)+'px"><canvas id="chartRanking"></canvas></div>' : '<div class="empty">Nenhum pedido registrado no período.</div>')+
     '</div>'+
     '<div class="card"><h2>Freezers há mais tempo sem visita</h2><div class="table-wrap"><table><thead><tr><th>Freezer</th><th>Rede</th><th>Última visita</th><th>Dias sem visita</th></tr></thead><tbody>'+
@@ -1576,14 +1580,10 @@ async function carregarMetaPainel(){
 }
 
 function painelMudarMes(){
-  const valor = $('painelMetaMesInput').value; // 'YYYY-MM'
+  const valor = $('painelMesInput').value; // 'YYYY-MM'
   if (!valor) return;
-  const [ano, mes] = valor.split('-').map(Number);
   painelMesAtual = valor+'-01';
-  const hoje = new Date();
-  const ehMesAtual = (hoje.getFullYear()===ano && (hoje.getMonth()+1)===mes);
-  painelFimAtual = ehMesAtual ? hoje.toISOString().slice(0,10) : new Date(ano, mes, 0).toISOString().slice(0,10); // hoje, se for o mês corrente, senão o último dia do mês escolhido
-  carregarMetaPainel();
+  renderPainel(); // recarrega tudo (cards, gráficos, ranking e meta) pro mês escolhido
 }
 
 async function salvarMetaPainel(){
