@@ -1280,7 +1280,7 @@ async function renderHistorico(){
   $('mainContent').innerHTML =
     '<div class="card">'+
       '<div class="row">'+
-        '<div class="field" style="flex:1"><label>Freezer</label><select class="inp" id="histFreezer" onchange="carregarHistorico()">'+
+        '<div class="field" style="flex:1"><label>Freezer</label><select class="inp" id="histFreezer" onchange="histNovoFiltro()">'+
           '<option value="">Todos os meus freezers</option>'+
           freezers.map(f => '<option value="'+f.id+'">'+esc(f.ponto_venda)+' — '+esc(f.codigo)+'</option>').join('')+
         '</select></div>'+
@@ -1288,8 +1288,14 @@ async function renderHistorico(){
       '<div id="histConteudo"><div class="loading">Carregando…</div></div>'+
     '</div>';
 
+  histLimite = HIST_PAGINA;
   await carregarHistorico();
 }
+
+const HIST_PAGINA = 60;
+let histLimite = HIST_PAGINA;
+function histNovoFiltro(){ histLimite = HIST_PAGINA; carregarHistorico(); }
+function histCarregarMais(){ histLimite += HIST_PAGINA; carregarHistorico(); }
 
 async function carregarHistorico(){
   const elConteudo = $('histConteudo');
@@ -1304,7 +1310,7 @@ async function carregarHistorico(){
 
   let visitas, itens;
   try {
-    let query = sb.from('freezer_visitas').select('*, freezers(ponto_venda, rede, codigo, codigo_cliente, endereco, cidade)').order('data_visita', { ascending:false }).order('criado_em', { ascending:false }).limit(60);
+    let query = sb.from('freezer_visitas').select('*, freezers(ponto_venda, rede, codigo, codigo_cliente, endereco, cidade)').order('data_visita', { ascending:false }).order('criado_em', { ascending:false }).limit(histLimite);
     if (freezerId) query = query.eq('freezer_id', freezerId);
     const resultado = await comTimeout(query, 15000);
     if (resultado.error) throw resultado.error;
@@ -1371,7 +1377,9 @@ async function carregarHistorico(){
         '</tbody></table></div>' : '')+
       '</div>'
     );
-  }).join('');
+  }).join('') + (visitas.length >= histLimite
+    ? '<div style="text-align:center;margin:14px 0"><button class="btn-outline btn" onclick="histCarregarMais()">Carregar mais</button></div>'
+    : '');
 }
 
 async function excluirVisita(visitaId){
