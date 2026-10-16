@@ -1304,7 +1304,7 @@ async function carregarHistorico(){
 
   let visitas, itens;
   try {
-    let query = sb.from('freezer_visitas').select('*, freezers(ponto_venda, codigo)').order('data_visita', { ascending:false }).order('criado_em', { ascending:false }).limit(60);
+    let query = sb.from('freezer_visitas').select('*, freezers(ponto_venda, rede, codigo, codigo_cliente, endereco, cidade)').order('data_visita', { ascending:false }).order('criado_em', { ascending:false }).limit(60);
     if (freezerId) query = query.eq('freezer_id', freezerId);
     const resultado = await comTimeout(query, 15000);
     if (resultado.error) throw resultado.error;
@@ -1330,7 +1330,11 @@ async function carregarHistorico(){
       '<div class="visita-item">'+
         '<div class="visita-head">'+
           '<div>'+
-            '<strong>'+esc(v.freezers ? v.freezers.ponto_venda : '—')+'</strong> — '+fmtData(v.data_visita)+
+            '<strong>'+esc(v.freezers ? v.freezers.ponto_venda : '—')+'</strong>'+(v.freezers && v.freezers.rede ? ' <span style="font-size:.8rem;color:var(--text-light)">('+esc(v.freezers.rede)+')</span>' : '')+' — '+fmtData(v.data_visita)+
+            (v.freezers ? '<div style="font-size:.78rem;color:var(--text-light);margin-top:2px">'+
+              '<strong>Cód. cliente: '+esc(v.freezers.codigo_cliente || '—')+'</strong> · Freezer '+esc(v.freezers.codigo || '—')+
+              (v.freezers.endereco || v.freezers.cidade ? '<br>'+esc([v.freezers.endereco, v.freezers.cidade].filter(Boolean).join(' — ')) : '')+
+            '</div>' : '')+
             '<div style="font-size:.76rem;color:var(--text-light)">Repositor: '+esc(v.repositor_nome)+'</div>'+
           '</div>'+
           '<div style="display:flex;gap:6px">'+
