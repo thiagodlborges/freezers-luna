@@ -157,11 +157,16 @@
   <div class="tab" id="tabVendasDia" data-tab="vendasdia" onclick="mudarTab('vendasdia')">🧾 Vendas do Dia</div>
   <div class="tab" id="tabRotas" data-tab="rotas" onclick="mudarTab('rotas')">🗺️ Rotas</div>
   <div class="tab" id="tabFrequencia" data-tab="frequencia" onclick="mudarTab('frequencia')">⏱️ Frequência de Visitas</div>
+  <div class="tab" id="tabAging" data-tab="aging" onclick="mudarTab('aging')">⏳ Aging de Clientes</div>
   <div class="tab" id="tabLojaFab" data-tab="lojafab" onclick="mudarTab('lojafab')">🏪 Loja de Fábrica</div>
 </nav>
 
 <main id="mainContent"><div class="loading">Carregando…</div></main>
 </div>
+</div>
+
+<div class="modal-overlay" id="modalAging">
+  <div class="modal" style="max-width:820px" id="modalAgingConteudo"></div>
 </div>
 
 <div class="modal-overlay" id="modalFreezer">
@@ -428,6 +433,7 @@ async function verificarAcessoEIniciar(){
     if (!souRepositor) {
       $('tabPainel').style.display = 'none';
       $('tabVendasDia').style.display = 'none';
+      $('tabAging').style.display = 'none';
       $('tabLojaFab').style.display = 'none'; // sem nenhum dos dois papéis, sem acesso
     }
     // souRepositor puro mantém acesso a "Loja de Fábrica" — só pra registrar contagem/abastecimento.
@@ -459,6 +465,7 @@ async function mudarTab(tab){
   else if (tab === 'vendasdia') await renderVendasDia();
   else if (tab === 'rotas') await renderRotas();
   else if (tab === 'frequencia') await renderFrequencia();
+  else if (tab === 'aging') await renderAging();
   else if (tab === 'lojafab') await renderLojaFab();
 }
 
@@ -2586,6 +2593,269 @@ async function salvarPrazoIdealFrequencia(){
   freqPrazoIdeal = v;
   await renderFrequencia();
   showMsg('freqMsg','Prazo ideal atualizado para '+v+' dia(s).','ok');
+}
+
+// ===================== AGING DE CLIENTES =====================
+// Aging = dias desde a última compra (venda efetivada). Médias de 3/6/12 meses só são
+// calculadas quando o histórico do módulo já cobre a janela inteira (início = 1º dia do mês da 1ª visita).
+const AG_JANELAS = [3, 6, 12];
+const AG_FAIXAS = [
+  { id:'0-30',  label:'0–30 dias',  min:0,  max:30,       cor:'#2E7D32' },
+  { id:'31-60', label:'31–60 dias', min:31, max:60,       cor:'#B8860B' },
+  { id:'61-90', label:'61–90 dias', min:61, max:90,       cor:'#D9822B' },
+  { id:'91+',   label:'91+ dias',   min:91, max:Infinity, cor:'#B43C3C' },
+  { id:'nunca', label:'Nunca comprou', min:null, max:null, cor:'#9A8F85' },
+];
+let agDados = null;       // { clientes, inicioOperacao, hoje }
+let agFaixaFiltro = '';
+let chartAgingFaixas = null, chartAgingCliente = null;
+
+function agSomaMeses(iso, n){
+  const [y, m, d] = iso.split('-').map(Number);
+  const dt = new Date(y, m-1+n, 1);
+  const ultimo = new Date(dt.getFullYear(), dt.getMonth()+1, 0).getDate();
+  dt.setDate(Math.min(d, ultimo));
+  return isoDateStr(dt);
+}
+function agDiasEntre(aIso, bIso){
+  return Math.round((new Date(bIso+'T12:00') - new Date(aIso+'T12:00')) / 86400000);
+}
+async function agBuscarTodos(montarQuery){
+  const todos = [];
+  for (let de = 0; ; de += 1000){
+    const { data, error } = await montarQuery().range(de, de+999);
+    if (error) throw error;
+    todos.push(...(data||[]));
+    if (!data || data.length < 1000) break;
+  }
+  return todos;
+}
+
+// Média mensal da janela de `n` meses: só existe se o módulo já tem `n` meses de histórico.
+function agMediaJanela(compras, n, hoje, inicioOperacao){
+  const inicioJanela = agSomaMeses(hoje, -n);
+  if (inicioJanela < inicioOperacao) return { disponivel:false, aPartirDe: agSomaMeses(inicioOperacao, n) };
+  const total = compras.filter(c => c.data > inicioJanela && c.data <= hoje).reduce((s,c) => s + c.valor, 0);
+  return { disponivel:true, media: total / n, total };
+}
+
+async function agCarregarDados(){
+  const hoje = isoDateStr(new Date());
+  const freezers = await carregarFreezers();
+  const [vendas, primeira] = await Promise.all([
+    agBuscarTodos(() => sb.from('freezer_visitas').select('id,freezer_id,data_visita,valor_bruto,valor_desconto,valor_liquido,numero_nota,forma_pagamento').eq('status_venda','efetivada').order('data_visita',{ascending:true}).order('id')),
+    sb.from('freezer_visitas').select('data_visita').order('data_visita',{ascending:true}).limit(1),
+  ]);
+  const primeiraData = primeira.data && primeira.data[0] ? primeira.data[0].data_visita : hoje;
+  const inicioOperacao = primeiraData.slice(0,7)+'-01';
+
+  // Vendas antigas sem valor_liquido gravado: soma os itens
+  const semValor = vendas.filter(v => v.valor_liquido == null);
+  const somaItens = {};
+  for (let i = 0; i < semValor.length; i += 100){
+    const ids = semValor.slice(i, i+100).map(v => v.id);
+    const { data } = await sb.from('freezer_visita_itens').select('visita_id,quantidade,valor_unitario').in('visita_id', ids);
+    (data||[]).forEach(it => { somaItens[it.visita_id] = (somaItens[it.visita_id]||0) + Number(it.quantidade)*Number(it.valor_unitario); });
+  }
+
+  const porFreezer = {};
+  vendas.forEach(v => {
+    const bruto = v.valor_bruto != null ? Number(v.valor_bruto) : (somaItens[v.id]||0);
+    const desconto = Number(v.valor_desconto)||0;
+    const valor = v.valor_liquido != null ? Number(v.valor_liquido) : bruto - desconto;
+    (porFreezer[v.freezer_id] = porFreezer[v.freezer_id] || []).push({ id:v.id, data:v.data_visita, bruto, desconto, valor, nota:v.numero_nota, pagamento:v.forma_pagamento });
+  });
+
+  const clientes = freezers.map(f => {
+    const compras = porFreezer[f.id] || [];
+    const total = compras.reduce((s,c) => s + c.valor, 0);
+    const descTotal = compras.reduce((s,c) => s + c.desconto, 0);
+    const brutoTotal = compras.reduce((s,c) => s + c.bruto, 0);
+    const ultima = compras.length ? compras[compras.length-1].data : null;
+    const dias = ultima ? agDiasEntre(ultima, hoje) : null;
+    const mesesOp = Math.max(1, agDiasEntre(inicioOperacao, hoje) / 30.4375);
+    return {
+      f, compras, total, n: compras.length, ticket: compras.length ? total / compras.length : 0,
+      ultima, dias, descTotal, brutoTotal,
+      descPct: brutoTotal > 0 ? descTotal / brutoTotal * 100 : 0,
+      receitaMes: total / mesesOp,
+      medias: AG_JANELAS.map(n => agMediaJanela(compras, n, hoje, inicioOperacao)),
+    };
+  });
+  agDados = { clientes, inicioOperacao, hoje };
+  return agDados;
+}
+
+function agFaixaDe(c){
+  if (c.dias == null) return AG_FAIXAS[4];
+  return AG_FAIXAS.find(x => x.min != null && c.dias >= x.min && c.dias <= x.max);
+}
+
+async function renderAging(){
+  $('mainContent').innerHTML = '<div class="loading">Carregando…</div>';
+  agFaixaFiltro = '';
+  try { await agCarregarDados(); }
+  catch (err){ $('mainContent').innerHTML = '<div class="card"><div class="empty">Erro ao carregar aging: '+esc(err.message||String(err))+'</div></div>'; return; }
+
+  const { clientes, inicioOperacao, hoje } = agDados;
+  const ativos = clientes.filter(c => c.f.status === 'ativo');
+  const comCompra = ativos.filter(c => c.n > 0);
+  const totalReceita = clientes.reduce((s,c) => s + c.total, 0);
+  const totalCompras = clientes.reduce((s,c) => s + c.n, 0);
+  const ticketGeral = totalCompras ? totalReceita / totalCompras : 0;
+  const mediaDias = comCompra.length ? comCompra.reduce((s,c) => s + c.dias, 0) / comCompra.length : 0;
+  const criticos = ativos.filter(c => c.dias == null || c.dias > 90).length;
+
+  const avisos = AG_JANELAS.map((n, i) => {
+    const m = agMediaJanela([], n, hoje, inicioOperacao);
+    return m.disponivel ? '' : '<li>Média de '+n+' meses: disponível a partir de <strong>'+fmtData(m.aPartirDe)+'</strong></li>';
+  }).join('');
+
+  $('mainContent').innerHTML =
+    '<div class="stat-box">'+
+      '<div class="stat"><div class="num">'+ativos.length+'</div><div class="lbl">Clientes ativos</div></div>'+
+      '<div class="stat"><div class="num" style="color:#2E7D32">'+comCompra.length+'</div><div class="lbl">Já compraram</div></div>'+
+      '<div class="stat"><div class="num" style="color:'+(criticos?'#B43C3C':'#2E7D32')+'">'+criticos+'</div><div class="lbl">Críticos (91+ dias ou nunca)</div></div>'+
+      '<div class="stat"><div class="num">'+fmtMoeda(ticketGeral)+'</div><div class="lbl">Ticket médio geral</div></div>'+
+      '<div class="stat"><div class="num">'+Math.round(mediaDias)+'</div><div class="lbl">Média de dias desde a última compra</div></div>'+
+    '</div>'+
+    '<div class="card">'+
+      '<h2 style="font-size:.95rem">Aging — clientes ativos por tempo desde a última compra</h2>'+
+      '<p class="hint">Considera vendas efetivadas. Clique em uma faixa para filtrar a lista.</p>'+
+      '<div style="height:200px"><canvas id="chartAgingFaixas"></canvas></div>'+
+    '</div>'+
+    (avisos ? '<div class="card" style="background:var(--creme)"><p class="hint" style="margin:0 0 6px"><strong>⏳ Histórico ainda em formação</strong> — o módulo tem dados desde '+fmtData(inicioOperacao)+'. Cada média só é calculada quando o histórico cobre a janela inteira:</p><ul class="hint" style="margin:0 0 0 18px">'+avisos+'</ul></div>' : '')+
+    '<div class="card">'+
+      '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">'+
+        '<h2 style="margin:0">Clientes</h2>'+
+        '<div style="display:flex;gap:8px;flex-wrap:wrap">'+
+          '<input class="inp" id="agBusca" placeholder="Buscar cliente, código, rede ou cidade…" style="min-width:240px" oninput="agRenderTabela()">'+
+          '<select class="inp" id="agOrdem" onchange="agRenderTabela()">'+
+            '<option value="dias">Mais tempo sem comprar</option>'+
+            '<option value="total">Maior receita</option>'+
+            '<option value="ticket">Maior ticket médio</option>'+
+            '<option value="nome">Nome</option>'+
+          '</select>'+
+        '</div>'+
+      '</div>'+
+      '<div id="agFiltroAtivo" style="margin-top:8px"></div>'+
+      '<div id="agTabela" style="margin-top:10px"></div>'+
+    '</div>'+
+    '<div class="card">'+
+      '<h2>Rentabilidade por freezer</h2>'+
+      '<p class="hint">Receita líquida (vendas efetivadas, já descontado o desconto comercial) por freezer desde '+fmtData(inicioOperacao)+'. O sistema ainda não registra custo dos itens vendidos, então a rentabilidade é medida pela receita líquida.</p>'+
+      '<div id="agRentab"></div>'+
+    '</div>';
+
+  agDesenharFaixas(ativos);
+  agRenderTabela();
+  agRenderRentabilidade();
+}
+
+function agDesenharFaixas(ativos){
+  const contagem = AG_FAIXAS.map(x => ativos.filter(c => agFaixaDe(c).id === x.id).length);
+  const ctx = document.getElementById('chartAgingFaixas');
+  if (chartAgingFaixas) chartAgingFaixas.destroy();
+  chartAgingFaixas = new Chart(ctx, {
+    type:'bar',
+    data:{ labels: AG_FAIXAS.map(x => x.label), datasets:[{ label:'Clientes', data: contagem, backgroundColor: AG_FAIXAS.map(x => x.cor), borderRadius:5 }] },
+    options:{ responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}},
+      scales:{ y:{ beginAtZero:true, ticks:{precision:0} } },
+      onClick:(_, els) => { if (els.length) agFiltrarFaixa(AG_FAIXAS[els[0].index].id); } },
+  });
+}
+
+function agFiltrarFaixa(id){
+  agFaixaFiltro = agFaixaFiltro === id ? '' : id;
+  agRenderTabela();
+}
+
+function agRenderTabela(){
+  const busca = ($('agBusca').value||'').trim().toLowerCase();
+  const ordem = $('agOrdem').value;
+  let lista = agDados.clientes.filter(c => c.f.status === 'ativo');
+  if (agFaixaFiltro) lista = lista.filter(c => agFaixaDe(c).id === agFaixaFiltro);
+  if (busca) lista = lista.filter(c => [c.f.ponto_venda, c.f.codigo, c.f.codigo_cliente, c.f.rede, c.f.cidade, c.f.nome_fantasia].some(x => (x||'').toLowerCase().includes(busca)));
+
+  const cmp = {
+    dias:   (a,b) => (b.dias == null ? Infinity : b.dias) - (a.dias == null ? Infinity : a.dias),
+    total:  (a,b) => b.total - a.total,
+    ticket: (a,b) => b.ticket - a.ticket,
+    nome:   (a,b) => (a.f.ponto_venda||'').localeCompare(b.f.ponto_venda||'', 'pt-BR'),
+  }[ordem];
+  lista.sort(cmp);
+
+  const fx = agFaixaFiltro ? AG_FAIXAS.find(x => x.id === agFaixaFiltro) : null;
+  $('agFiltroAtivo').innerHTML = fx ? '<span class="flag-pill on" style="cursor:pointer" onclick="agFiltrarFaixa(\''+fx.id+'\')">Faixa: '+fx.label+' ✕</span>' : '';
+
+  if (!lista.length){ $('agTabela').innerHTML = '<div class="empty">Nenhum cliente encontrado.</div>'; return; }
+  const th = AG_JANELAS.map(n => '<th>Média '+n+'m</th>').join('');
+  $('agTabela').innerHTML =
+    '<div class="table-wrap"><table><thead><tr><th>Cliente</th><th>Última compra</th><th>Aging</th><th>Compras</th><th>Ticket médio</th>'+th+'<th>Receita total</th></tr></thead><tbody>'+
+    lista.map(c => {
+      const fx = agFaixaDe(c);
+      const pill = c.dias == null ? 'Nunca comprou' : c.dias+' dias';
+      const medias = c.medias.map(m => '<td>'+(m.disponivel ? fmtMoeda(m.media) : '<span style="color:var(--text-light)" title="Disponível a partir de '+fmtData(m.aPartirDe)+'">—</span>')+'</td>').join('');
+      return '<tr style="cursor:pointer" onclick="agAbrirCliente(\''+c.f.id+'\')">'+
+        '<td><strong>'+esc(c.f.ponto_venda)+'</strong>'+(c.f.rede?' <span style="font-size:.78rem;color:var(--text-light)">('+esc(c.f.rede)+')</span>':'')+'<div style="font-size:.74rem;color:var(--text-light)">Cód. '+esc(c.f.codigo_cliente||'—')+' · '+esc(c.f.cidade||'—')+'</div></td>'+
+        '<td>'+fmtData(c.ultima)+'</td>'+
+        '<td><span class="flag-pill" style="background:'+fx.cor+'22;color:'+fx.cor+';font-weight:600">'+pill+'</span></td>'+
+        '<td>'+c.n+'</td><td>'+(c.n?fmtMoeda(c.ticket):'—')+'</td>'+medias+
+        '<td>'+fmtMoeda(c.total)+'</td></tr>';
+    }).join('')+'</tbody></table></div>';
+}
+
+function agRenderRentabilidade(){
+  const lista = agDados.clientes.filter(c => c.n > 0).sort((a,b) => b.total - a.total);
+  const totalGeral = lista.reduce((s,c) => s + c.total, 0);
+  if (!lista.length){ $('agRentab').innerHTML = '<div class="empty">Nenhuma venda efetivada ainda.</div>'; return; }
+  $('agRentab').innerHTML =
+    '<div class="table-wrap"><table><thead><tr><th>#</th><th>Freezer / Cliente</th><th>Receita líquida</th><th>% do total</th><th>Receita/mês</th><th>Desconto médio</th></tr></thead><tbody>'+
+    lista.map((c, i) => '<tr style="cursor:pointer" onclick="agAbrirCliente(\''+c.f.id+'\')"><td>'+(i+1)+'</td>'+
+      '<td>'+esc(c.f.ponto_venda)+' <span style="font-size:.76rem;color:var(--text-light)">— '+esc(c.f.codigo||'—')+'</span></td>'+
+      '<td style="font-weight:600">'+fmtMoeda(c.total)+'</td>'+
+      '<td>'+(totalGeral ? (c.total/totalGeral*100).toFixed(1).replace('.',',') : '0')+'%</td>'+
+      '<td>'+fmtMoeda(c.receitaMes)+'</td>'+
+      '<td>'+c.descPct.toFixed(1).replace('.',',')+'%</td></tr>').join('')+
+    '</tbody></table></div>';
+}
+
+function agAbrirCliente(freezerId){
+  const c = agDados.clientes.find(x => x.f.id === freezerId);
+  if (!c) return;
+  const f = c.f, fx = agFaixaDe(c);
+  const mediaCard = (n, m) => '<div class="stat"><div class="num" style="font-size:1.4rem">'+(m.disponivel ? fmtMoeda(m.media) : '—')+'</div><div class="lbl">Média mensal — '+(n===12?'último ano':'últimos '+n+' meses')+'</div>'+
+    (m.disponivel ? '' : '<div class="hint" style="margin:4px 0 0">Disponível a partir de '+fmtData(m.aPartirDe)+'</div>')+'</div>';
+
+  $('modalAgingConteudo').innerHTML =
+    '<h3>'+esc(f.ponto_venda)+(f.rede?' <span style="font-size:.85rem;color:var(--text-light)">('+esc(f.rede)+')</span>':'')+'</h3>'+
+    '<p class="hint">Cód. cliente: '+esc(f.codigo_cliente||'—')+' · Freezer '+esc(f.codigo||'—')+' · '+esc([f.endereco,f.cidade].filter(Boolean).join(' — ')||'—')+' · '+badgeStatus(f.status)+'</p>'+
+    '<div class="stat-box" style="gap:14px">'+
+      '<div class="stat"><div class="num" style="font-size:1.4rem">'+fmtData(c.ultima)+'</div><div class="lbl">Última compra</div>'+(c.dias!=null?'<div class="hint" style="margin:4px 0 0;color:'+fx.cor+'">há '+c.dias+' dias</div>':'')+'</div>'+
+      '<div class="stat"><div class="num" style="font-size:1.4rem">'+(c.n?fmtMoeda(c.ticket):'—')+'</div><div class="lbl">Ticket médio ('+c.n+' compra'+(c.n===1?'':'s')+')</div></div>'+
+      '<div class="stat"><div class="num" style="font-size:1.4rem">'+fmtMoeda(c.total)+'</div><div class="lbl">Receita líquida total</div></div>'+
+      '<div class="stat"><div class="num" style="font-size:1.4rem">'+fmtMoeda(c.receitaMes)+'</div><div class="lbl">Receita/mês (desde '+fmtData(agDados.inicioOperacao)+')</div></div>'+
+    '</div>'+
+    '<div class="stat-box" style="gap:14px">'+AG_JANELAS.map((n,i) => mediaCard(n, c.medias[i])).join('')+'</div>'+
+    (c.n ? '<div style="height:150px;margin-bottom:14px"><canvas id="chartAgingCliente"></canvas></div>' : '')+
+    '<h2 style="font-size:.95rem">Histórico de compras</h2>'+
+    (c.n ? '<div class="table-wrap"><table><thead><tr><th>Data</th><th>NF</th><th>Pagamento</th><th>Bruto</th><th>Desconto</th><th>Líquido</th></tr></thead><tbody>'+
+      c.compras.slice().reverse().map(x => '<tr><td>'+fmtData(x.data)+'</td><td>'+esc(x.nota||'—')+'</td><td>'+esc(x.pagamento||'—')+'</td><td>'+fmtMoeda(x.bruto)+'</td><td>'+(x.desconto?'− '+fmtMoeda(x.desconto):'—')+'</td><td style="font-weight:600">'+fmtMoeda(x.valor)+'</td></tr>').join('')+
+      '</tbody></table></div>' : '<div class="empty">Este cliente ainda não tem compras efetivadas.</div>')+
+    '<div style="text-align:right;margin-top:14px"><button class="btn-outline btn" onclick="fecharModal(\'modalAging\')">Fechar</button></div>';
+  $('modalAging').classList.add('show');
+
+  if (c.n){
+    const porMes = {};
+    c.compras.forEach(x => { const k = x.data.slice(0,7); porMes[k] = (porMes[k]||0) + x.valor; });
+    const meses = Object.keys(porMes).sort();
+    if (chartAgingCliente) chartAgingCliente.destroy();
+    chartAgingCliente = new Chart(document.getElementById('chartAgingCliente'), {
+      type:'bar',
+      data:{ labels: meses.map(m => mesLabelPtBr(m+'-01')), datasets:[{ label:'Compras no mês', data: meses.map(m => porMes[m]), backgroundColor:'#6B1E2E', borderRadius:5 }] },
+      options:{ responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}, tooltip:{callbacks:{label:(x)=>fmtMoeda(x.parsed.y)}}}, scales:{ y:{ beginAtZero:true, ticks:{ callback:(v)=>fmtMoeda(v) } } } },
+    });
+  }
 }
 
 // ===================== LOJA DE FÁBRICA =====================
