@@ -2608,7 +2608,20 @@ const AG_FAIXAS = [
 ];
 let agDados = null;       // { clientes, inicioOperacao, hoje }
 let agFaixaFiltro = '';
-let chartAgingFaixas = null, chartAgingCliente = null;
+let agClasseFiltro = '';
+let chartAgingFaixas = null, chartAgingCliente = null, chartAgingProd = null;
+// Produtividade pela média mensal de compras: > 1200 produtivo; 650–1200 moderado; < 650 improdutivo
+const AG_LIMITE_PRODUTIVO = 1200, AG_LIMITE_MODERADO = 650;
+const AG_CLASSES = [
+  { id:'produtivo',   label:'Produtivo',   regra:'acima de R$ 1.200/mês',        cor:'#2E7D32' },
+  { id:'moderado',    label:'Moderado',    regra:'R$ 650 a R$ 1.200/mês',        cor:'#B8860B' },
+  { id:'improdutivo', label:'Improdutivo', regra:'abaixo de R$ 650/mês',         cor:'#B43C3C' },
+];
+function agClasseDe(c){
+  if (c.receitaMes > AG_LIMITE_PRODUTIVO) return AG_CLASSES[0];
+  if (c.receitaMes >= AG_LIMITE_MODERADO) return AG_CLASSES[1];
+  return AG_CLASSES[2];
+}
 
 function agSomaMeses(iso, n){
   const [y, m, d] = iso.split('-').map(Number);
@@ -2694,6 +2707,7 @@ function agFaixaDe(c){
 async function renderAging(){
   $('mainContent').innerHTML = '<div class="loading">Carregando…</div>';
   agFaixaFiltro = '';
+  agClasseFiltro = '';
   try { await agCarregarDados(); }
   catch (err){ $('mainContent').innerHTML = '<div class="card"><div class="empty">Erro ao carregar aging: '+esc(err.message||String(err))+'</div></div>'; return; }
 
@@ -2724,6 +2738,12 @@ async function renderAging(){
       '<p class="hint">Considera vendas efetivadas. Clique em uma faixa para filtrar a lista.</p>'+
       '<div style="height:200px"><canvas id="chartAgingFaixas"></canvas></div>'+
     '</div>'+
+    '<div class="card">'+
+      '<h2 style="font-size:.95rem">Produtividade dos freezers — média mensal de compras</h2>'+
+      '<p class="hint">Média mensal = receita líquida das vendas efetivadas ÷ meses desde '+fmtData(inicioOperacao)+'. '+
+        AG_CLASSES.map(x => '<strong style="color:'+x.cor+'">'+x.label+'</strong>: '+x.regra).join(' · ')+'. Clique em uma barra para filtrar a lista.</p>'+
+      '<div style="height:200px"><canvas id="chartAgingProd"></canvas></div>'+
+    '</div>'+
     (avisos ? '<div class="card" style="background:var(--creme)"><p class="hint" style="margin:0 0 6px"><strong>⏳ Histórico ainda em formação</strong> — o módulo tem dados desde '+fmtData(inicioOperacao)+'. Cada média só é calculada quando o histórico cobre a janela inteira:</p><ul class="hint" style="margin:0 0 0 18px">'+avisos+'</ul></div>' : '')+
     '<div class="card">'+
       '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">'+
@@ -2748,6 +2768,7 @@ async function renderAging(){
     '</div>';
 
   agDesenharFaixas(ativos);
+  agDesenharProdutividade(ativos);
   agRenderTabela();
   agRenderRentabilidade();
 }
@@ -2765,6 +2786,24 @@ function agDesenharFaixas(ativos){
   });
 }
 
+function agDesenharProdutividade(ativos){
+  const contagem = AG_CLASSES.map(x => ativos.filter(c => agClasseDe(c).id === x.id).length);
+  const ctx = document.getElementById('chartAgingProd');
+  if (chartAgingProd) chartAgingProd.destroy();
+  chartAgingProd = new Chart(ctx, {
+    type:'bar',
+    data:{ labels: AG_CLASSES.map(x => x.label+' ('+x.regra+')'), datasets:[{ label:'Freezers', data: contagem, backgroundColor: AG_CLASSES.map(x => x.cor), borderRadius:5 }] },
+    options:{ responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}},
+      scales:{ y:{ beginAtZero:true, ticks:{precision:0} } },
+      onClick:(_, els) => { if (els.length) agFiltrarClasse(AG_CLASSES[els[0].index].id); } },
+  });
+}
+
+function agFiltrarClasse(id){
+  agClasseFiltro = agClasseFiltro === id ? '' : id;
+  agRenderTabela();
+}
+
 function agFiltrarFaixa(id){
   agFaixaFiltro = agFaixaFiltro === id ? '' : id;
   agRenderTabela();
@@ -2775,6 +2814,7 @@ function agRenderTabela(){
   const ordem = $('agOrdem').value;
   let lista = agDados.clientes.filter(c => c.f.status === 'ativo');
   if (agFaixaFiltro) lista = lista.filter(c => agFaixaDe(c).id === agFaixaFiltro);
+  if (agClasseFiltro) lista = lista.filter(c => agClasseDe(c).id === agClasseFiltro);
   if (busca) lista = lista.filter(c => [c.f.ponto_venda, c.f.codigo, c.f.codigo_cliente, c.f.rede, c.f.cidade, c.f.nome_fantasia].some(x => (x||'').toLowerCase().includes(busca)));
 
   const cmp = {
@@ -2786,12 +2826,15 @@ function agRenderTabela(){
   lista.sort(cmp);
 
   const fx = agFaixaFiltro ? AG_FAIXAS.find(x => x.id === agFaixaFiltro) : null;
-  $('agFiltroAtivo').innerHTML = fx ? '<span class="flag-pill on" style="cursor:pointer" onclick="agFiltrarFaixa(\''+fx.id+'\')">Faixa: '+fx.label+' ✕</span>' : '';
+  const cl = agClasseFiltro ? AG_CLASSES.find(x => x.id === agClasseFiltro) : null;
+  $('agFiltroAtivo').innerHTML =
+    (fx ? '<span class="flag-pill on" style="cursor:pointer" onclick="agFiltrarFaixa(\''+fx.id+'\')">Faixa: '+fx.label+' ✕</span> ' : '')+
+    (cl ? '<span class="flag-pill on" style="cursor:pointer" onclick="agFiltrarClasse(\''+cl.id+'\')">Produtividade: '+cl.label+' ✕</span>' : '');
 
   if (!lista.length){ $('agTabela').innerHTML = '<div class="empty">Nenhum cliente encontrado.</div>'; return; }
   const th = AG_JANELAS.map(n => '<th>Média '+n+'m</th>').join('');
   $('agTabela').innerHTML =
-    '<div class="table-wrap"><table><thead><tr><th>Cliente</th><th>Última compra</th><th>Aging</th><th>Compras</th><th>Ticket médio</th>'+th+'<th>Receita total</th></tr></thead><tbody>'+
+    '<div class="table-wrap"><table><thead><tr><th>Cliente</th><th>Última compra</th><th>Aging</th><th>Compras</th><th>Ticket médio</th><th>Média mensal</th><th>Produtividade</th>'+th+'<th>Receita total</th></tr></thead><tbody>'+
     lista.map(c => {
       const fx = agFaixaDe(c);
       const pill = c.dias == null ? 'Nunca comprou' : c.dias+' dias';
@@ -2800,7 +2843,9 @@ function agRenderTabela(){
         '<td><strong>'+esc(c.f.ponto_venda)+'</strong>'+(c.f.rede?' <span style="font-size:.78rem;color:var(--text-light)">('+esc(c.f.rede)+')</span>':'')+'<div style="font-size:.74rem;color:var(--text-light)">Cód. '+esc(c.f.codigo_cliente||'—')+' · '+esc(c.f.cidade||'—')+'</div></td>'+
         '<td>'+fmtData(c.ultima)+'</td>'+
         '<td><span class="flag-pill" style="background:'+fx.cor+'22;color:'+fx.cor+';font-weight:600">'+pill+'</span></td>'+
-        '<td>'+c.n+'</td><td>'+(c.n?fmtMoeda(c.ticket):'—')+'</td>'+medias+
+        '<td>'+c.n+'</td><td>'+(c.n?fmtMoeda(c.ticket):'—')+'</td>'+
+        '<td style="font-weight:600">'+fmtMoeda(c.receitaMes)+'</td>'+
+        '<td><span class="flag-pill" style="background:'+agClasseDe(c).cor+'22;color:'+agClasseDe(c).cor+';font-weight:600">'+agClasseDe(c).label+'</span></td>'+medias+
         '<td>'+fmtMoeda(c.total)+'</td></tr>';
     }).join('')+'</tbody></table></div>';
 }
@@ -2810,12 +2855,13 @@ function agRenderRentabilidade(){
   const totalGeral = lista.reduce((s,c) => s + c.total, 0);
   if (!lista.length){ $('agRentab').innerHTML = '<div class="empty">Nenhuma venda efetivada ainda.</div>'; return; }
   $('agRentab').innerHTML =
-    '<div class="table-wrap"><table><thead><tr><th>#</th><th>Freezer / Cliente</th><th>Receita líquida</th><th>% do total</th><th>Receita/mês</th><th>Desconto médio</th></tr></thead><tbody>'+
+    '<div class="table-wrap"><table><thead><tr><th>#</th><th>Freezer / Cliente</th><th>Receita líquida</th><th>% do total</th><th>Média mensal</th><th>Produtividade</th><th>Desconto médio</th></tr></thead><tbody>'+
     lista.map((c, i) => '<tr style="cursor:pointer" onclick="agAbrirCliente(\''+c.f.id+'\')"><td>'+(i+1)+'</td>'+
       '<td>'+esc(c.f.ponto_venda)+' <span style="font-size:.76rem;color:var(--text-light)">— '+esc(c.f.codigo||'—')+'</span></td>'+
       '<td style="font-weight:600">'+fmtMoeda(c.total)+'</td>'+
       '<td>'+(totalGeral ? (c.total/totalGeral*100).toFixed(1).replace('.',',') : '0')+'%</td>'+
       '<td>'+fmtMoeda(c.receitaMes)+'</td>'+
+      '<td><span class="flag-pill" style="background:'+agClasseDe(c).cor+'22;color:'+agClasseDe(c).cor+';font-weight:600">'+agClasseDe(c).label+'</span></td>'+
       '<td>'+c.descPct.toFixed(1).replace('.',',')+'%</td></tr>').join('')+
     '</tbody></table></div>';
 }
@@ -2834,7 +2880,7 @@ function agAbrirCliente(freezerId){
       '<div class="stat"><div class="num" style="font-size:1.4rem">'+fmtData(c.ultima)+'</div><div class="lbl">Última compra</div>'+(c.dias!=null?'<div class="hint" style="margin:4px 0 0;color:'+fx.cor+'">há '+c.dias+' dias</div>':'')+'</div>'+
       '<div class="stat"><div class="num" style="font-size:1.4rem">'+(c.n?fmtMoeda(c.ticket):'—')+'</div><div class="lbl">Ticket médio ('+c.n+' compra'+(c.n===1?'':'s')+')</div></div>'+
       '<div class="stat"><div class="num" style="font-size:1.4rem">'+fmtMoeda(c.total)+'</div><div class="lbl">Receita líquida total</div></div>'+
-      '<div class="stat"><div class="num" style="font-size:1.4rem">'+fmtMoeda(c.receitaMes)+'</div><div class="lbl">Receita/mês (desde '+fmtData(agDados.inicioOperacao)+')</div></div>'+
+      '<div class="stat"><div class="num" style="font-size:1.4rem">'+fmtMoeda(c.receitaMes)+'</div><div class="lbl">Média mensal de compras (desde '+fmtData(agDados.inicioOperacao)+')</div><div class="hint" style="margin:4px 0 0;color:'+agClasseDe(c).cor+'">'+agClasseDe(c).label+'</div></div>'+
     '</div>'+
     '<div class="stat-box" style="gap:14px">'+AG_JANELAS.map((n,i) => mediaCard(n, c.medias[i])).join('')+'</div>'+
     (c.n ? '<div style="height:150px;margin-bottom:14px"><canvas id="chartAgingCliente"></canvas></div>' : '')+
