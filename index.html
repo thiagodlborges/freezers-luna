@@ -110,7 +110,7 @@
   .modal h3{font-family:'Cormorant Garamond',serif;font-size:1.25rem;color:var(--bordo-dark);margin-bottom:14px}
   .modal-actions{display:flex;gap:10px;margin-top:16px}
   .modal-close{background:none;border:none;color:var(--marrom-dark);text-decoration:underline;cursor:pointer;font-size:.78rem;display:block;margin:14px auto 0}
-  .msg{font-size:.78rem;margin-top:8px;display:none}
+  .msg{font-size:.78rem;margin-top:8px;display:none;white-space:pre-line}
   .msg.show{display:block}
   .msg.err{color:#B43C3C}
   .msg.ok{color:#27AE60}
@@ -540,6 +540,21 @@ function renderFreezersLista(){
 
 let produtosSimplesCache = [];
 
+// Ordem de exibição de todas as listas de preço: Luna (picolés, potes) e depois Yeez (picolés, potes),
+// do mais caro para o mais barato dentro de cada grupo.
+const ORDEM_GRUPOS_PRECO = [['Luna','Picolés'],['Luna','Potes'],['Yeez','Picolés'],['Yeez','Potes']];
+function tipoPorNome(nome){ return /^pote/i.test(nome||'') ? 'Potes' : 'Picolés'; }
+function marcaSimples(p){ return /yeez/i.test(p.marca||'') || /yeez/i.test(p.nome||'') ? 'Yeez' : 'Luna'; }
+function agruparPorLinhaETipo(itens, getMarca, getTipo, getPreco){
+  const grupos = ORDEM_GRUPOS_PRECO.map(([m,t]) => ({ marca: m, tipo: t, titulo: m.toUpperCase()+' — '+t, itens: [] }));
+  itens.forEach(it => {
+    const idx = ORDEM_GRUPOS_PRECO.findIndex(([m,t]) => m === getMarca(it) && t === getTipo(it));
+    grupos[idx >= 0 ? idx : 0].itens.push(it);
+  });
+  grupos.forEach(g => g.itens.sort((a,b) => (getPreco(b) - getPreco(a)) || String(a.nome).localeCompare(String(b.nome),'pt-BR')));
+  return grupos.filter(g => g.itens.length);
+}
+
 async function renderProdutosSimples(){
   const { data, error } = await sb.from('freezer_produtos_simples').select('*').order('categoria').order('nome');
   const el = $('produtosSimplesLista');
@@ -548,7 +563,9 @@ async function renderProdutosSimples(){
   if (!data || !data.length){ el.innerHTML = '<div class="empty">Nenhum produto simples cadastrado ainda.</div>'; return; }
 
   el.innerHTML = '<div class="table-wrap"><table><thead><tr><th>Produto</th><th>Categoria</th><th>Código</th><th>Preço (R$)</th><th>Un/Caixa</th><th>Ativo</th><th></th></tr></thead><tbody>'+
-    data.map(p => (
+    agruparPorLinhaETipo(data, marcaSimples, p => tipoPorNome(p.nome), p => Number(p.preco)||0).map(g =>
+      '<tr><td colspan="7" style="background:#F4ECE4;font-weight:700;font-size:.78rem;letter-spacing:.04em;color:var(--bordo-dark)">'+esc(g.titulo)+'</td></tr>'+
+      g.itens.map(p => (
       '<tr'+(p.ativo?'':' class="inativo"')+'>'+
         '<td>'+esc(p.nome)+'</td>'+
         '<td>'+esc(p.categoria)+'</td>'+
@@ -558,7 +575,7 @@ async function renderProdutosSimples(){
         '<td><input type="checkbox" '+(p.ativo?'checked':'')+' onchange="salvarAtivoSimples(\''+p.id+'\',this.checked)"></td>'+
         '<td style="white-space:nowrap"><button class="btn-outline btn btn-sm" onclick="abrirModalProdutoSimples(\''+p.id+'\')">Editar</button> <button class="btn-danger" onclick="excluirProdutoSimples(\''+p.id+'\')">🗑️</button></td>'+
       '</tr>'
-    )).join('')+
+    )).join('')).join('')+
     '</tbody></table></div>';
 }
 
@@ -656,6 +673,7 @@ async function renderTabelasPreco(){
   '</tbody></table></div>';
 }
 
+let produtosFabTabela = [];
 async function abrirModalTabelaPreco(id){
   $('tpMsg').className = 'msg';
   $('tpId').value = id || '';
@@ -670,14 +688,34 @@ async function abrirModalTabelaPreco(id){
     const { data: itens } = await sb.from('freezer_tabela_preco_itens').select('*').eq('tabela_id', id);
     itensExistentes = itens || [];
   }
-  const precoPorProduto = {}; itensExistentes.forEach(i => { precoPorProduto[i.produto_simples_id] = i.preco; });
+  const precoPorProduto = {}; itensExistentes.forEach(i => { precoPorProduto[i.produto_simples_id || i.produto_id] = i.preco; });
+  const { data: produtosFab } = await sb.from('precificacao_produtos').select('id,nome,categoria').in('categoria', ['Picolés','Potes']).eq('origem','fabrica').eq('ativo', true).order('categoria').order('nome');
+  produtosFabTabela = produtosFab || [];
 
-  $('tpItensLista').innerHTML = (produtos||[]).map(p => (
-    '<div class="row" style="margin-bottom:6px;align-items:center">'+
-      '<span style="flex:2;font-size:.82rem">'+esc(p.nome)+' <span style="color:var(--text-light);font-size:.72rem">(padrão '+fmtMoeda(p.preco)+')</span></span>'+
-      '<input class="inp" type="number" min="0" step="0.01" id="tpItem_'+p.id+'" value="'+(precoPorProduto[p.id]!=null?precoPorProduto[p.id]:'')+'" placeholder="usa padrão" style="flex:1">'+
-    '</div>'
-  )).join('');
+  // preço de referência (tabela padrão) para ordenar os itens que ainda não têm preço nesta tabela
+  const { data: tabPadrao } = await sb.from('freezer_tabelas_preco').select('id').eq('padrao', true).maybeSingle();
+  const precoPadraoRef = {};
+  if (tabPadrao){
+    const { data: itensPadrao } = await sb.from('freezer_tabela_preco_itens').select('produto_simples_id,produto_id,preco').eq('tabela_id', tabPadrao.id);
+    (itensPadrao||[]).forEach(r => { precoPadraoRef[r.produto_simples_id || r.produto_id] = Number(r.preco); });
+  }
+  const linhasTabela = produtosFabTabela.map(p => ({ kind:'F', id:p.id, nome:p.nome, marca:'Luna', tipo: p.categoria === 'Potes' ? 'Potes' : 'Picolés',
+      preco: precoPorProduto[p.id] != null ? Number(precoPorProduto[p.id]) : (precoPadraoRef[p.id] || 0) }))
+    .concat((produtos||[]).map(p => ({ kind:'S', id:p.id, nome:p.nome, marca: marcaSimples(p), tipo: tipoPorNome(p.nome), padrao: p.preco,
+      preco: precoPorProduto[p.id] != null ? Number(precoPorProduto[p.id]) : (Number(p.preco)||0) })));
+  $('tpItensLista').innerHTML = agruparPorLinhaETipo(linhasTabela, x => x.marca, x => x.tipo, x => x.preco).map(g =>
+    '<div style="font-weight:700;font-size:.78rem;letter-spacing:.04em;color:var(--bordo-dark);background:#F4ECE4;padding:5px 8px;margin:10px 0 6px;border-radius:4px">'+esc(g.titulo)+'</div>'+
+    g.itens.map(x => x.kind === 'F'
+      ? '<div class="row" style="margin-bottom:6px;align-items:center">'+
+          '<span style="flex:2;font-size:.82rem">'+esc(x.nome)+' <span style="color:var(--text-light);font-size:.72rem">(fábrica)</span></span>'+
+          '<input class="inp" type="number" min="0" step="0.01" id="tpItemF_'+x.id+'" value="'+(precoPorProduto[x.id]!=null?precoPorProduto[x.id]:'')+'" placeholder="usa preço da Precificação" style="flex:1">'+
+        '</div>'
+      : '<div class="row" style="margin-bottom:6px;align-items:center">'+
+          '<span style="flex:2;font-size:.82rem">'+esc(x.nome)+' <span style="color:var(--text-light);font-size:.72rem">(padrão '+fmtMoeda(x.padrao)+')</span></span>'+
+          '<input class="inp" type="number" min="0" step="0.01" id="tpItem_'+x.id+'" value="'+(precoPorProduto[x.id]!=null?precoPorProduto[x.id]:'')+'" placeholder="usa padrão" style="flex:1">'+
+        '</div>'
+    ).join('')
+  ).join('');
 
   $('modalTabelaPreco').classList.add('show');
 }
@@ -706,8 +744,19 @@ async function salvarTabelaPreco(){
     }
   });
 
-  await sb.from('freezer_tabela_preco_itens').delete().eq('tabela_id', tabelaId);
-  if (itensParaSalvar.length) await sb.from('freezer_tabela_preco_itens').insert(itensParaSalvar);
+  produtosFabTabela.forEach(p => {
+    const campo = $('tpItemF_'+p.id);
+    if (campo && campo.value.trim() !== ''){
+      itensParaSalvar.push({ tabela_id: tabelaId, produto_id: p.id, preco: Number(campo.value) });
+    }
+  });
+
+  const { error: errDel } = await sb.from('freezer_tabela_preco_itens').delete().eq('tabela_id', tabelaId);
+  if (errDel){ showMsg('tpMsg','Erro ao atualizar os itens: '+errDel.message,'err'); return; }
+  if (itensParaSalvar.length){
+    const { error: errItens } = await sb.from('freezer_tabela_preco_itens').insert(itensParaSalvar);
+    if (errItens){ showMsg('tpMsg','Erro ao salvar os itens: '+errItens.message,'err'); return; }
+  }
 
   fecharModal('modalTabelaPreco');
   await renderTabelasPreco();
@@ -848,7 +897,60 @@ async function carregarProdutosFreezer(){
   const fab = (fabR.data || []).map(p => ({ produto_id: p.id, produto_avulso_id: null, nome: p.nome, rotulo: p.nome, preco_estimado: precoPorProdutoId[p.id] ? Number(precoPorProdutoId[p.id].preco_venda) : 0, unidades_por_caixa: null }));
   const avl = (avulsoR.data || []).map(p => ({ produto_id: null, produto_avulso_id: p.id, nome: p.nome, rotulo: p.nome+' (Yeez — fora da Precificação)', preco_estimado: Number(p.preco)||0, unidades_por_caixa: p.unidades_por_caixa || null }));
   produtosCache = fab.concat(avl);
+  // Tabela padrão (hoje a PDV): preço de referência de todo item que o cliente não tem em tabela própria
+  const { data: tabPadrao } = await sb.from('freezer_tabelas_preco').select('id').eq('padrao', true).eq('ativo', true).maybeSingle();
+  if (tabPadrao){
+    const { data: itensPadrao } = await sb.from('freezer_tabela_preco_itens').select('produto_simples_id,produto_id,preco').eq('tabela_id', tabPadrao.id);
+    const precoPadrao = {};
+    (itensPadrao||[]).forEach(r => { precoPadrao[r.produto_simples_id || r.produto_id] = Number(r.preco); });
+    produtosCache.forEach(p => {
+      const v = precoPadrao[p.produto_avulso_id || p.produto_id];
+      if (v != null) p.preco_estimado = v;
+    });
+  }
+  await atualizarEstoqueProdutos();
   return produtosCache;
+}
+
+// Disponibilidade na fábrica (estoque menos reservado no armazém logístico). null = item sem controle de estoque.
+async function atualizarEstoqueProdutos(){
+  if (!produtosCache) return;
+  const { data, error } = await sb.rpc('freezer_estoque_catalogo');
+  if (error){ console.error('Erro ao ler estoque da fábrica:', error.message); return; }
+  const porChave = {};
+  (data||[]).forEach(r => { porChave[(r.produto_id||'')+'|'+(r.produto_avulso_id||'')] = Number(r.disponivel); });
+  const { data: cxData } = await sb.rpc('freezer_unidades_caixa');
+  const cxPorProduto = {};
+  (cxData||[]).forEach(r => { cxPorProduto[r.produto_id] = Number(r.unidades_por_caixa); });
+  produtosCache.forEach(p => {
+    const k = (p.produto_id||'')+'|'+(p.produto_avulso_id||'');
+    p.estoque_disp = k in porChave ? porChave[k] : null;
+    if (p.produto_id) p.unidades_por_caixa = cxPorProduto[p.produto_id] > 1 ? cxPorProduto[p.produto_id] : null;
+  });
+}
+
+// Picolé (caixa de 20 un) é vendido e estocado só em caixa fechada; demais itens em unidade.
+function upcProduto(p){ return Number(p && p.unidades_por_caixa) > 1 ? Number(p.unidades_por_caixa) : 1; }
+function soCaixaProduto(p){ return upcProduto(p) > 1; }
+function produtoDoItem(it){
+  return produtosCache.find(p => (p.produto_id && p.produto_id===it.produto_id) || (p.produto_avulso_id && p.produto_avulso_id===it.produto_avulso_id));
+}
+function unidadesDoItem(it){ const p = produtoDoItem(it); return p && soCaixaProduto(p) ? ['caixa'] : ['un']; }
+function aplicarUnidadePadraoItem(it){
+  const p = produtoDoItem(it);
+  it.unidade = p && soCaixaProduto(p) ? 'caixa' : 'un';
+  if (it.unidade === 'caixa') it.quantidade = Math.max(1, Math.round(Number(it.quantidade)||1));
+}
+function valorLinhaItem(it, precoUnit){
+  const p = produtoDoItem(it);
+  return (Number(precoUnit)||0) * (it.unidade === 'caixa' ? upcProduto(p) : 1) * (Number(it.quantidade)||0);
+}
+
+function rotuloEstoque(p){
+  if (p.estoque_disp == null) return '';
+  const upc = upcProduto(p);
+  const n = upc > 1 ? Math.floor(p.estoque_disp / upc) : Math.round(p.estoque_disp*100)/100;
+  return n > 0 ? ' — estoque: '+n.toLocaleString('pt-BR')+(upc > 1 ? ' cx de '+upc+' un' : '') : ' — SEM ESTOQUE';
 }
 
 let ultimaVisitaPorFreezerNV = {};
@@ -857,6 +959,7 @@ async function renderNovaVisita(){
   $('mainContent').innerHTML = '<div class="loading">Carregando…</div>';
   const freezers = freezersCache.length ? freezersCache : await carregarFreezers();
   await carregarProdutosFreezer();
+  await atualizarEstoqueProdutos();
   itensVisitaAtual = [];
   fotosVisitaAtual = [];
 
@@ -938,19 +1041,19 @@ function renderItensVisita(){
     return;
   }
   wrap.innerHTML = itensVisitaAtual.map((it, i) => {
-    const catalogado = produtosCache.find(p => (p.produto_id && p.produto_id===it.produto_id) || (p.produto_avulso_id && p.produto_avulso_id===it.produto_avulso_id));
+    const catalogado = produtoDoItem(it);
     const precoEstimado = catalogado ? catalogado.preco_estimado : 0;
-    const valorLinha = precoEstimado * (Number(it.quantidade)||0);
-    const upc = catalogado ? catalogado.unidades_por_caixa : null;
+    const valorLinha = valorLinhaItem(it, precoEstimado);
+    const upc = catalogado && soCaixaProduto(catalogado) ? upcProduto(catalogado) : null;
     return '<div class="item-row">'+
       '<div class="field autocomplete-wrap"><label>Produto</label>'+
         '<input class="inp" type="text" autocomplete="off" id="prodInput'+i+'" value="'+esc(it.produto_nome||'')+'" placeholder="Digite pra buscar…" oninput="filtrarItemDropdown('+i+',this.value)" onfocus="abrirItemDropdown('+i+')">'+
         '<div class="autocomplete-list" id="prodDropdown'+i+'" style="display:none"></div>'+
-        (upc ? '<div style="font-size:.78rem;color:var(--text-light);margin-top:3px">📦 1 caixa = '+upc+' un</div>' : '')+
+        (upc ? '<div style="font-size:.78rem;color:var(--text-light);margin-top:3px">📦 Vendido só em caixa fechada: 1 caixa = '+upc+' un</div>' : '')+
       '</div>'+
-      '<div class="field qtd"><label>Qtd</label><input class="inp" type="number" min="0.01" step="0.01" value="'+it.quantidade+'" onchange="itensVisitaAtual['+i+'].quantidade=this.value; renderItensVisita()"></div>'+
-      '<div class="field un"><label>Unidade</label><select class="inp" onchange="itensVisitaAtual['+i+'].unidade=this.value">'+
-        ['un','caixa'].map(u => '<option value="'+u+'" '+(it.unidade===u?'selected':'')+'>'+u+'</option>').join('')+
+      '<div class="field qtd"><label>Qtd'+(upc?' (caixas)':'')+'</label><input class="inp" type="number" min="'+(upc?1:0.01)+'" step="'+(upc?1:0.01)+'" value="'+it.quantidade+'" onchange="itensVisitaAtual['+i+'].quantidade=this.value; renderItensVisita()"></div>'+
+      '<div class="field un"><label>Unidade</label><select class="inp" onchange="itensVisitaAtual['+i+'].unidade=this.value; renderItensVisita()">'+
+        unidadesDoItem(it).map(u => '<option value="'+u+'" '+(it.unidade===u?'selected':'')+'>'+u+'</option>').join('')+
       '</select></div>'+
       '<div class="field" style="max-width:110px"><label>Valor est.</label><div style="padding:9px 0;font-size:.85rem;font-weight:600;color:var(--bordo-dark)">'+fmtMoeda(valorLinha)+'</div></div>'+
       '<button class="btn-danger" onclick="removerItemVisita('+i+')">🗑️</button>'+
@@ -958,8 +1061,8 @@ function renderItensVisita(){
   }).join('');
 
   const totalPedido = itensVisitaAtual.reduce((soma, it) => {
-    const catalogado = produtosCache.find(p => (p.produto_id && p.produto_id===it.produto_id) || (p.produto_avulso_id && p.produto_avulso_id===it.produto_avulso_id));
-    return soma + (catalogado ? catalogado.preco_estimado : 0) * (Number(it.quantidade)||0);
+    const catalogado = produtoDoItem(it);
+    return soma + valorLinhaItem(it, catalogado ? catalogado.preco_estimado : 0);
   }, 0);
   wrap.innerHTML += '<p style="text-align:right;font-weight:600;margin-top:8px">Total estimado do pedido: '+fmtMoeda(totalPedido)+' <span style="font-weight:400;color:var(--text-light);font-size:.78rem">(o valor final considera a tabela de preço do cliente, se houver)</span></p>';
 }
@@ -972,7 +1075,7 @@ function listaProdutosFiltrada(texto){
 
 function montarDropdownProdutoHTML(i, lista){
   if (!lista.length) return '<div class="autocomplete-item autocomplete-empty">Nenhum produto encontrado.</div>';
-  return lista.map(p => '<div class="autocomplete-item" onmousedown="selecionarItemDropdown('+i+','+produtosCache.indexOf(p)+')">'+esc(p.rotulo)+'</div>').join('');
+  return lista.map(p => '<div class="autocomplete-item"'+(p.estoque_disp===0?' style="color:#B43C3C"':'')+' onmousedown="selecionarItemDropdown('+i+','+produtosCache.indexOf(p)+')">'+esc(p.rotulo)+esc(rotuloEstoque(p))+'</div>').join('');
 }
 
 function abrirItemDropdown(i){
@@ -1001,6 +1104,7 @@ function selecionarItemDropdown(i, idx){
   itensVisitaAtual[i].produto_id = item.produto_id;
   itensVisitaAtual[i].produto_avulso_id = item.produto_avulso_id;
   itensVisitaAtual[i].produto_nome = item.nome;
+  aplicarUnidadePadraoItem(itensVisitaAtual[i]); // picolé: caixa; demais: unidade
   fecharTodosDropdownsProduto();
   renderItensVisita(); // atualiza valor estimado e o hint de "1 caixa = N un" da linha
 }
@@ -1031,11 +1135,25 @@ async function salvarVisita(){
   const itemSemProduto = itensVisitaAtual.some(it => !it.produto_id && !it.produto_avulso_id);
   if (itemSemProduto){ showMsg('nvMsg','Escolha um produto válido da lista (digite e selecione uma sugestão) pra cada item, ou remova a linha.','err'); return; }
 
+  const picoleFracionado = itensVisitaAtual.find(it => { const p = produtoDoItem(it); return p && soCaixaProduto(p) && (it.unidade !== 'caixa' || !Number.isInteger(Number(it.quantidade)) || Number(it.quantidade) < 1); });
+  if (picoleFracionado){ showMsg('nvMsg','"'+picoleFracionado.produto_nome+'" é vendido só em caixa fechada (20 un): informe um número inteiro de caixas.','err'); return; }
+
   const semVisita = $('nvSemVisita').checked;
   if (semVisita && !itensVisitaAtual.length){ showMsg('nvMsg','Adicione pelo menos um item — venda sem visita precisa ter algo vendido.','err'); return; }
 
   const btn = $('btnSalvarVisita');
   btn.disabled = true; btn.textContent = 'Salvando…';
+
+  // Estoque da fábrica: sem saldo disponível não há proposta (o servidor confere de novo e reserva os itens).
+  if (itensVisitaAtual.length){
+    const { data: chk, error: chkErr } = await sb.rpc('fn_estoque_checar_itens', { p_itens: itensVisitaAtual.map(it => ({ produto_id: it.produto_id, produto_avulso_id: it.produto_avulso_id, produto_nome: it.produto_nome, quantidade: Number(it.quantidade), unidade: it.unidade })) });
+    if (chkErr){ showMsg('nvMsg', 'Erro ao consultar o estoque da fábrica: '+chkErr.message, 'err'); btn.disabled=false; btn.textContent='Salvar Visita'; return; }
+    const faltas = (chk||[]).filter(c => c.controlado && !c.ok);
+    if (faltas.length){
+      showMsg('nvMsg', 'Sem estoque na fábrica — a proposta não foi criada:\n'+faltas.map(c => '• '+c.produto_nome+': pedido '+Number(c.solicitado).toLocaleString('pt-BR')+', disponível '+Number(c.disponivel).toLocaleString('pt-BR')).join('\n')+'\nAjuste as quantidades ou remova os itens sem estoque.', 'err');
+      btn.disabled=false; btn.textContent='Salvar Visita'; return;
+    }
+  }
 
   const payload = {
     p_freezer_id: freezerId,
@@ -1078,6 +1196,13 @@ let efTabelaItensCache = {};
 // Preço de um item "avulso" (linha Yeez) numa tabela; sem tabela ou sem o produto nela, usa o preço padrão.
 // Para caixa, multiplica pelas unidades por caixa. Produtos da fábrica (produto_id) não mudam.
 function precoItemNaTabela(it, tabelaId){
+  if (it.produto_id && !it.produto_avulso_id){
+    // produto de fábrica: preço da tabela do cliente, senão o preço vigente da Precificação (por unidade)
+    const catF = produtosCache.find(p => p.produto_id === it.produto_id);
+    if (!catF) return null;
+    const daTabelaF = tabelaId && efTabelaItensCache[tabelaId] ? efTabelaItensCache[tabelaId][it.produto_id] : undefined;
+    return Math.round((daTabelaF != null ? Number(daTabelaF) : Number(catF.preco_estimado)) * (it.unidade === 'caixa' ? upcProduto(catF) : 1) * 100) / 100;
+  }
   if (!it.produto_avulso_id) return null;
   const cat = produtosCache.find(p => p.produto_avulso_id === it.produto_avulso_id);
   if (!cat) return null;
@@ -1089,10 +1214,10 @@ function precoItemNaTabela(it, tabelaId){
 async function trocarTabelaEfetivar(tabelaId, aoAbrir){
   efTabelaAtualId = tabelaId || '';
   if (efTabelaAtualId && !efTabelaItensCache[efTabelaAtualId]){
-    const { data, error } = await sb.from('freezer_tabela_preco_itens').select('produto_simples_id,preco').eq('tabela_id', efTabelaAtualId);
+    const { data, error } = await sb.from('freezer_tabela_preco_itens').select('produto_simples_id,produto_id,preco').eq('tabela_id', efTabelaAtualId);
     if (error){ alert('Erro ao carregar a tabela de preço: '+error.message); return; }
     efTabelaItensCache[efTabelaAtualId] = {};
-    (data||[]).forEach(r => { efTabelaItensCache[efTabelaAtualId][r.produto_simples_id] = r.preco; });
+    (data||[]).forEach(r => { efTabelaItensCache[efTabelaAtualId][r.produto_simples_id || r.produto_id] = r.preco; });
   }
   if (aoAbrir) return;
   // Reprecifica os itens da linha Yeez com a tabela escolhida (o valor continua editável linha a linha)
@@ -1123,13 +1248,14 @@ async function abrirModalEfetivar(visitaId){
 
   efValorTotalAtual = 0;
   await carregarProdutosFreezer();
+  await atualizarEstoqueProdutos();
   // Tabela de preço: mostra a cadastrada no cliente e deixa trocar antes de efetivar
-  const { data: tabelas } = await sb.from('freezer_tabelas_preco').select('id,nome').eq('ativo', true).order('nome');
+  const { data: tabelas } = await sb.from('freezer_tabelas_preco').select('id,nome,padrao').eq('ativo', true).order('nome');
   const { data: fz } = await sb.from('freezers').select('tabela_preco_id').eq('id', vis ? vis.freezer_id : null).maybeSingle();
   const tabelaCliente = fz && fz.tabela_preco_id ? fz.tabela_preco_id : '';
   const nomeTabelaCliente = (tabelas||[]).find(t => t.id === tabelaCliente);
   efTabelaAtualId = tabelaCliente;
-  $('efTabelaPreco').innerHTML = '<option value="">Tabela padrão (sem tabela específica)</option>' +
+  $('efTabelaPreco').innerHTML = '<option value="">Tabela padrão ('+esc(((tabelas||[]).find(t => t.padrao)||{}).nome||'sem tabela específica')+')</option>' +
     (tabelas||[]).map(t => '<option value="'+t.id+'">'+esc(t.nome)+'</option>').join('');
   $('efTabelaPreco').value = tabelaCliente;
   $('efTabelaInfo').textContent = tabelaCliente
@@ -1151,9 +1277,9 @@ function renderEfItens(){
         '<div class="field autocomplete-wrap" style="flex:1;min-width:140px"><label>Produto (novo)</label>'+
           '<input class="inp" type="text" autocomplete="off" id="efProdInput'+i+'" value="'+esc(it.produto_nome||'')+'" placeholder="Digite pra buscar…" oninput="filtrarItemEfetivar('+i+',this.value)" onfocus="abrirItemEfetivar('+i+')">'+
           '<div class="autocomplete-list" id="efProdDropdown'+i+'" style="display:none"></div></div>'+
-        '<div class="field" style="max-width:100px"><label>Qtd</label><input class="inp" type="number" min="0.01" step="0.01" value="'+it.quantidade+'" onchange="efItensAtuais['+i+'].quantidade=Number(this.value)||0; recalcularEfValorTotal()"></div>'+
+        '<div class="field" style="max-width:100px"><label>Qtd'+(unidadesDoItem(it)[0]==='caixa'?' (caixas)':'')+'</label><input class="inp" type="number" min="'+(unidadesDoItem(it)[0]==='caixa'?1:0.01)+'" step="'+(unidadesDoItem(it)[0]==='caixa'?1:0.01)+'" value="'+it.quantidade+'" onchange="efItensAtuais['+i+'].quantidade=Number(this.value)||0; recalcularEfValorTotal()"></div>'+
         '<div class="field" style="max-width:90px"><label>Unidade</label><select class="inp" onchange="efItensAtuais['+i+'].unidade=this.value; (function(x){var n=precoItemNaTabela(x,efTabelaAtualId); if(n!=null) x.valor_unitario=n;})(efItensAtuais['+i+']); renderEfItens()">'+
-          ['un','caixa'].map(u => '<option value="'+u+'" '+(it.unidade===u?'selected':'')+'>'+u+'</option>').join('')+'</select></div>'+
+          unidadesDoItem(it).map(u => '<option value="'+u+'" '+(it.unidade===u?'selected':'')+'>'+u+'</option>').join('')+'</select></div>'+
         '<div class="field" style="max-width:120px"><label>Valor unit.</label><input class="inp" type="number" min="0" step="0.01" value="'+it.valor_unitario+'" onchange="efItensAtuais['+i+'].valor_unitario=Number(this.value)||0; recalcularEfValorTotal()"></div>'+
         '<button class="btn-danger" onclick="removerItemEfetivar('+i+')">🗑️</button>'+
       '</div>'
@@ -1177,7 +1303,7 @@ function removerItemEfetivar(i){
 }
 function montarDropdownEfetivarHTML(i, lista){
   if (!lista.length) return '<div class="autocomplete-item autocomplete-empty">Nenhum produto encontrado.</div>';
-  return lista.map(p => '<div class="autocomplete-item" onmousedown="selecionarItemEfetivar('+i+','+produtosCache.indexOf(p)+')">'+esc(p.rotulo)+'</div>').join('');
+  return lista.map(p => '<div class="autocomplete-item"'+(p.estoque_disp===0?' style="color:#B43C3C"':'')+' onmousedown="selecionarItemEfetivar('+i+','+produtosCache.indexOf(p)+')">'+esc(p.rotulo)+esc(rotuloEstoque(p))+'</div>').join('');
 }
 function abrirItemEfetivar(i){
   fecharTodosDropdownsProduto();
@@ -1202,6 +1328,7 @@ function selecionarItemEfetivar(i, idx){
   it.produto_id = item.produto_id;
   it.produto_avulso_id = item.produto_avulso_id;
   it.produto_nome = item.nome;
+  aplicarUnidadePadraoItem(it);
   const precoTab = precoItemNaTabela(it, efTabelaAtualId);
   it.valor_unitario = precoTab != null ? precoTab : (item.preco_estimado || 0);
   fecharTodosDropdownsProduto();
@@ -1229,6 +1356,8 @@ async function salvarEfetivacao(){
   if (efItensAtuais.some(it => it.novo && !it.produto_id && !it.produto_avulso_id)){
     showMsg('efMsg','Escolha um produto válido da lista (digite e selecione uma sugestão) para cada item novo, ou remova a linha.','err'); return;
   }
+  const picoleInvalido = efItensAtuais.find(it => it.novo && (() => { const p = produtoDoItem(it); return p && soCaixaProduto(p) && (it.unidade !== 'caixa' || !Number.isInteger(Number(it.quantidade)) || Number(it.quantidade) < 1); })());
+  if (picoleInvalido){ showMsg('efMsg','"'+picoleInvalido.produto_nome+'" é vendido só em caixa fechada (20 un): informe um número inteiro de caixas.','err'); return; }
   if (efItensAtuais.some(it => it.novo && !(it.quantidade > 0))){
     showMsg('efMsg','A quantidade dos itens novos precisa ser maior que zero.','err'); return;
   }
