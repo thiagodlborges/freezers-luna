@@ -1493,11 +1493,12 @@ async function renderPainel(){
   const mesLabel = mesLabelPtBr(painelMesAtual);
   painelFimAtual = fim;
 
-  const [serieR, rankingR, semVisitaR, riscoR] = await Promise.all([
+  const [serieR, rankingR, semVisitaR, riscoR, pendentesR] = await Promise.all([
     sb.rpc('freezer_dashboard_serie_temporal', { p_data_inicio: inicio, p_data_fim: fim }),
     sb.rpc('freezer_dashboard_ranking_produtos', { p_data_inicio: inicio, p_data_fim: fim }),
     sb.rpc('freezer_dashboard_sem_visita'),
     sb.rpc('freezer_dashboard_risco_falha'),
+    sb.from('freezer_visitas').select('id', { count: 'exact', head: true }).eq('pedido_tirado', true).or('status_venda.is.null,status_venda.neq.efetivada'),
   ]);
 
   if (serieR.error){ $('mainContent').innerHTML = '<div class="card"><div class="empty">Erro: '+esc(serieR.error.message)+'</div></div>'; return; }
@@ -1506,6 +1507,7 @@ async function renderPainel(){
   const ranking = (rankingR.data || []).slice(0, 10);
   const semVisita = (semVisitaR.data || []).slice(0, 10);
   const risco = riscoR.data || [];
+  const propostasPendentes = pendentesR.count || 0;
 
   const totalVisitasMes = serie.reduce((s,d) => s + Number(d.qtd_visitas||0), 0);
   const totalPropostaMes = serie.reduce((s,d) => s + Number(d.valor_proposta||0), 0);
@@ -1530,6 +1532,7 @@ async function renderPainel(){
       '<div class="stat"><div class="num">'+totalVisitasMes+'</div><div class="lbl">Visitas em '+mesLabel+'</div></div>'+
       '<div class="stat"><div class="num" style="color:#D9B96A">'+fmtMoeda(totalPropostaMes)+'</div><div class="lbl">Proposta ('+mesLabel+')</div></div>'+
       '<div class="stat"><div class="num" style="color:#6B1E2E">'+fmtMoeda(totalEfetivadaMes)+'</div><div class="lbl">Efetivada ('+mesLabel+')</div></div>'+
+      '<div class="stat"><div class="num" style="color:'+(propostasPendentes?'#B8860B':'#2E7D32')+'">'+propostasPendentes+'</div><div class="lbl">Propostas não efetivadas</div></div>'+
       '<div class="stat"><div class="num" style="color:'+(risco.length?'#B43C3C':'#2E7D32')+'">'+risco.length+'</div><div class="lbl">Freezers com risco de falha</div></div>'+
     '</div>'+
     '<div class="card">'+
