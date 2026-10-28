@@ -867,6 +867,17 @@ async function carregarProdutosFreezer(){
   const fab = (fabR.data || []).map(p => ({ produto_id: p.id, produto_avulso_id: null, nome: p.nome, rotulo: p.nome, preco_estimado: precoPorProdutoId[p.id] ? Number(precoPorProdutoId[p.id].preco_venda) : 0, unidades_por_caixa: null }));
   const avl = (avulsoR.data || []).map(p => ({ produto_id: null, produto_avulso_id: p.id, nome: p.nome, rotulo: p.nome+' (Yeez — fora da Precificação)', preco_estimado: Number(p.preco)||0, unidades_por_caixa: p.unidades_por_caixa || null }));
   produtosCache = fab.concat(avl);
+  // Tabela padrão (hoje a PDV): preço de referência de todo item que o cliente não tem em tabela própria
+  const { data: tabPadrao } = await sb.from('freezer_tabelas_preco').select('id').eq('padrao', true).eq('ativo', true).maybeSingle();
+  if (tabPadrao){
+    const { data: itensPadrao } = await sb.from('freezer_tabela_preco_itens').select('produto_simples_id,produto_id,preco').eq('tabela_id', tabPadrao.id);
+    const precoPadrao = {};
+    (itensPadrao||[]).forEach(r => { precoPadrao[r.produto_simples_id || r.produto_id] = Number(r.preco); });
+    produtosCache.forEach(p => {
+      const v = precoPadrao[p.produto_avulso_id || p.produto_id];
+      if (v != null) p.preco_estimado = v;
+    });
+  }
   await atualizarEstoqueProdutos();
   return produtosCache;
 }
@@ -1209,12 +1220,12 @@ async function abrirModalEfetivar(visitaId){
   await carregarProdutosFreezer();
   await atualizarEstoqueProdutos();
   // Tabela de preço: mostra a cadastrada no cliente e deixa trocar antes de efetivar
-  const { data: tabelas } = await sb.from('freezer_tabelas_preco').select('id,nome').eq('ativo', true).order('nome');
+  const { data: tabelas } = await sb.from('freezer_tabelas_preco').select('id,nome,padrao').eq('ativo', true).order('nome');
   const { data: fz } = await sb.from('freezers').select('tabela_preco_id').eq('id', vis ? vis.freezer_id : null).maybeSingle();
   const tabelaCliente = fz && fz.tabela_preco_id ? fz.tabela_preco_id : '';
   const nomeTabelaCliente = (tabelas||[]).find(t => t.id === tabelaCliente);
   efTabelaAtualId = tabelaCliente;
-  $('efTabelaPreco').innerHTML = '<option value="">Tabela padrão (sem tabela específica)</option>' +
+  $('efTabelaPreco').innerHTML = '<option value="">Tabela padrão ('+esc(((tabelas||[]).find(t => t.padrao)||{}).nome||'sem tabela específica')+')</option>' +
     (tabelas||[]).map(t => '<option value="'+t.id+'">'+esc(t.nome)+'</option>').join('');
   $('efTabelaPreco').value = tabelaCliente;
   $('efTabelaInfo').textContent = tabelaCliente
