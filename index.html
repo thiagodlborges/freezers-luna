@@ -540,6 +540,21 @@ function renderFreezersLista(){
 
 let produtosSimplesCache = [];
 
+// Ordem de exibição de todas as listas de preço: Luna (picolés, potes) e depois Yeez (picolés, potes),
+// do mais caro para o mais barato dentro de cada grupo.
+const ORDEM_GRUPOS_PRECO = [['Luna','Picolés'],['Luna','Potes'],['Yeez','Picolés'],['Yeez','Potes']];
+function tipoPorNome(nome){ return /^pote/i.test(nome||'') ? 'Potes' : 'Picolés'; }
+function marcaSimples(p){ return /yeez/i.test(p.marca||'') || /yeez/i.test(p.nome||'') ? 'Yeez' : 'Luna'; }
+function agruparPorLinhaETipo(itens, getMarca, getTipo, getPreco){
+  const grupos = ORDEM_GRUPOS_PRECO.map(([m,t]) => ({ marca: m, tipo: t, titulo: m.toUpperCase()+' — '+t, itens: [] }));
+  itens.forEach(it => {
+    const idx = ORDEM_GRUPOS_PRECO.findIndex(([m,t]) => m === getMarca(it) && t === getTipo(it));
+    grupos[idx >= 0 ? idx : 0].itens.push(it);
+  });
+  grupos.forEach(g => g.itens.sort((a,b) => (getPreco(b) - getPreco(a)) || String(a.nome).localeCompare(String(b.nome),'pt-BR')));
+  return grupos.filter(g => g.itens.length);
+}
+
 async function renderProdutosSimples(){
   const { data, error } = await sb.from('freezer_produtos_simples').select('*').order('categoria').order('nome');
   const el = $('produtosSimplesLista');
@@ -548,7 +563,9 @@ async function renderProdutosSimples(){
   if (!data || !data.length){ el.innerHTML = '<div class="empty">Nenhum produto simples cadastrado ainda.</div>'; return; }
 
   el.innerHTML = '<div class="table-wrap"><table><thead><tr><th>Produto</th><th>Categoria</th><th>Código</th><th>Preço (R$)</th><th>Un/Caixa</th><th>Ativo</th><th></th></tr></thead><tbody>'+
-    data.map(p => (
+    agruparPorLinhaETipo(data, marcaSimples, p => tipoPorNome(p.nome), p => Number(p.preco)||0).map(g =>
+      '<tr><td colspan="7" style="background:#F4ECE4;font-weight:700;font-size:.78rem;letter-spacing:.04em;color:var(--bordo-dark)">'+esc(g.titulo)+'</td></tr>'+
+      g.itens.map(p => (
       '<tr'+(p.ativo?'':' class="inativo"')+'>'+
         '<td>'+esc(p.nome)+'</td>'+
         '<td>'+esc(p.categoria)+'</td>'+
@@ -558,7 +575,7 @@ async function renderProdutosSimples(){
         '<td><input type="checkbox" '+(p.ativo?'checked':'')+' onchange="salvarAtivoSimples(\''+p.id+'\',this.checked)"></td>'+
         '<td style="white-space:nowrap"><button class="btn-outline btn btn-sm" onclick="abrirModalProdutoSimples(\''+p.id+'\')">Editar</button> <button class="btn-danger" onclick="excluirProdutoSimples(\''+p.id+'\')">🗑️</button></td>'+
       '</tr>'
-    )).join('')+
+    )).join('')).join('')+
     '</tbody></table></div>';
 }
 
@@ -675,17 +692,30 @@ async function abrirModalTabelaPreco(id){
   const { data: produtosFab } = await sb.from('precificacao_produtos').select('id,nome,categoria').in('categoria', ['Picolés','Potes']).eq('origem','fabrica').eq('ativo', true).order('categoria').order('nome');
   produtosFabTabela = produtosFab || [];
 
-  $('tpItensLista').innerHTML = produtosFabTabela.map(p => (
-    '<div class="row" style="margin-bottom:6px;align-items:center">'+
-      '<span style="flex:2;font-size:.82rem">'+esc(p.nome)+' <span style="color:var(--text-light);font-size:.72rem">(fábrica)</span></span>'+
-      '<input class="inp" type="number" min="0" step="0.01" id="tpItemF_'+p.id+'" value="'+(precoPorProduto[p.id]!=null?precoPorProduto[p.id]:'')+'" placeholder="usa preço da Precificação" style="flex:1">'+
-    '</div>'
-  )).join('') + (produtos||[]).map(p => (
-    '<div class="row" style="margin-bottom:6px;align-items:center">'+
-      '<span style="flex:2;font-size:.82rem">'+esc(p.nome)+' <span style="color:var(--text-light);font-size:.72rem">(padrão '+fmtMoeda(p.preco)+')</span></span>'+
-      '<input class="inp" type="number" min="0" step="0.01" id="tpItem_'+p.id+'" value="'+(precoPorProduto[p.id]!=null?precoPorProduto[p.id]:'')+'" placeholder="usa padrão" style="flex:1">'+
-    '</div>'
-  )).join('');
+  // preço de referência (tabela padrão) para ordenar os itens que ainda não têm preço nesta tabela
+  const { data: tabPadrao } = await sb.from('freezer_tabelas_preco').select('id').eq('padrao', true).maybeSingle();
+  const precoPadraoRef = {};
+  if (tabPadrao){
+    const { data: itensPadrao } = await sb.from('freezer_tabela_preco_itens').select('produto_simples_id,produto_id,preco').eq('tabela_id', tabPadrao.id);
+    (itensPadrao||[]).forEach(r => { precoPadraoRef[r.produto_simples_id || r.produto_id] = Number(r.preco); });
+  }
+  const linhasTabela = produtosFabTabela.map(p => ({ kind:'F', id:p.id, nome:p.nome, marca:'Luna', tipo: p.categoria === 'Potes' ? 'Potes' : 'Picolés',
+      preco: precoPorProduto[p.id] != null ? Number(precoPorProduto[p.id]) : (precoPadraoRef[p.id] || 0) }))
+    .concat((produtos||[]).map(p => ({ kind:'S', id:p.id, nome:p.nome, marca: marcaSimples(p), tipo: tipoPorNome(p.nome), padrao: p.preco,
+      preco: precoPorProduto[p.id] != null ? Number(precoPorProduto[p.id]) : (Number(p.preco)||0) })));
+  $('tpItensLista').innerHTML = agruparPorLinhaETipo(linhasTabela, x => x.marca, x => x.tipo, x => x.preco).map(g =>
+    '<div style="font-weight:700;font-size:.78rem;letter-spacing:.04em;color:var(--bordo-dark);background:#F4ECE4;padding:5px 8px;margin:10px 0 6px;border-radius:4px">'+esc(g.titulo)+'</div>'+
+    g.itens.map(x => x.kind === 'F'
+      ? '<div class="row" style="margin-bottom:6px;align-items:center">'+
+          '<span style="flex:2;font-size:.82rem">'+esc(x.nome)+' <span style="color:var(--text-light);font-size:.72rem">(fábrica)</span></span>'+
+          '<input class="inp" type="number" min="0" step="0.01" id="tpItemF_'+x.id+'" value="'+(precoPorProduto[x.id]!=null?precoPorProduto[x.id]:'')+'" placeholder="usa preço da Precificação" style="flex:1">'+
+        '</div>'
+      : '<div class="row" style="margin-bottom:6px;align-items:center">'+
+          '<span style="flex:2;font-size:.82rem">'+esc(x.nome)+' <span style="color:var(--text-light);font-size:.72rem">(padrão '+fmtMoeda(x.padrao)+')</span></span>'+
+          '<input class="inp" type="number" min="0" step="0.01" id="tpItem_'+x.id+'" value="'+(precoPorProduto[x.id]!=null?precoPorProduto[x.id]:'')+'" placeholder="usa padrão" style="flex:1">'+
+        '</div>'
+    ).join('')
+  ).join('');
 
   $('modalTabelaPreco').classList.add('show');
 }
