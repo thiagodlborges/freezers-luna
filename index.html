@@ -2881,6 +2881,7 @@ async function renderAging(){
       '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">'+
         '<h2 style="margin:0">Clientes</h2>'+
         '<div style="display:flex;gap:8px;flex-wrap:wrap">'+
+          '<button class="btn-outline btn btn-sm" onclick="agExportarExcel()" title="Baixa todos os clientes, compras e parâmetros em Excel">📥 Exportar Excel</button>'+
           '<input class="inp" id="agBusca" placeholder="Buscar cliente, código, rede ou cidade…" style="min-width:240px" oninput="agRenderTabela()">'+
           '<select class="inp" id="agOrdem" onchange="agRenderTabela()">'+
             '<option value="dias">Mais tempo sem comprar</option>'+
@@ -2996,6 +2997,76 @@ function agRenderRentabilidade(){
       '<td><span class="flag-pill" style="background:'+agClasseDe(c).cor+'22;color:'+agClasseDe(c).cor+';font-weight:600">'+agClasseDe(c).label+'</span></td>'+
       '<td>'+c.descPct.toFixed(1).replace('.',',')+'%</td></tr>').join('')+
     '</tbody></table></div>';
+}
+
+// Exporta a base do aging em Excel (valores numéricos e datas reais, pra filtrar/pivotar/tratar à vontade).
+function agExportarExcel(){
+  if (!agDados){ alert('Os dados do aging ainda não foram carregados.'); return; }
+  const { clientes, inicioOperacao, hoje } = agDados;
+  const dt = iso => iso ? new Date(iso+'T12:00') : null;
+  const FMT_DATA = 'dd/mm/yyyy', FMT_MOEDA = '#,##0.00', FMT_INT = '0';
+
+  const cab1 = ['Cód. cliente','Cód. freezer','Ponto de venda','Rede','Cidade','Repositor','Status do freezer',
+    'Última compra','Dias desde a última compra','Faixa de aging','Nº de compras','Ticket médio (R$)',
+    'Receita bruta (R$)','Desconto total (R$)','Receita líquida (R$)','Desconto médio (%)','Média mensal (R$)','Produtividade']
+    .concat(AG_JANELAS.map(n => 'Média mensal '+n+'m (R$)'));
+  const aoa1 = [cab1];
+  clientes.forEach(c => aoa1.push([
+    c.f.codigo_cliente||'', c.f.codigo||'', c.f.ponto_venda||'', c.f.rede||'', c.f.cidade||'', c.f.repositor_nome||'', labelStatus(c.f.status),
+    dt(c.ultima), c.dias, agFaixaDe(c).label, c.n, c.n ? c.ticket : null,
+    c.brutoTotal, c.descTotal, c.total, c.descPct, c.receitaMes, agClasseDe(c).label,
+  ].concat(c.medias.map(m => m.disponivel ? m.media : null))));
+
+  const aoa2 = [['Cód. cliente','Cód. freezer','Ponto de venda','Rede','Cidade','Data da compra','Mês','NF','Forma de pagamento','Valor bruto (R$)','Desconto (R$)','Valor líquido (R$)']];
+  const aoa3 = [['Cód. cliente','Ponto de venda','Mês','Nº de compras','Valor líquido (R$)']];
+  clientes.forEach(c => {
+    const porMes = {};
+    c.compras.forEach(x => {
+      aoa2.push([c.f.codigo_cliente||'', c.f.codigo||'', c.f.ponto_venda||'', c.f.rede||'', c.f.cidade||'', dt(x.data), x.data.slice(0,7), x.nota||'', x.pagamento||'', x.bruto, x.desconto, x.valor]);
+      const m = porMes[x.data.slice(0,7)] = porMes[x.data.slice(0,7)] || { n:0, v:0 };
+      m.n++; m.v += x.valor;
+    });
+    Object.keys(porMes).sort().forEach(mes => aoa3.push([c.f.codigo_cliente||'', c.f.ponto_venda||'', mes, porMes[mes].n, porMes[mes].v]));
+  });
+
+  const aoa4 = [['Parâmetro','Valor'],
+    ['Gerado em', new Date()],
+    ['Data de referência do aging', dt(hoje)],
+    ['Início do histórico do módulo', dt(inicioOperacao)],
+    ['Base das vendas', 'Vendas efetivadas (propostas não entram)'],
+    ['Média mensal', 'Receita líquida ÷ meses desde o início do histórico'],
+    ['Produtivo (média mensal)', '> R$ '+AG_LIMITE_PRODUTIVO],
+    ['Moderado (média mensal)', 'R$ '+AG_LIMITE_MODERADO+' a R$ '+AG_LIMITE_PRODUTIVO],
+    ['Improdutivo (média mensal)', '< R$ '+AG_LIMITE_MODERADO],
+    ['Faixas de aging', AG_FAIXAS.map(x => x.label).join(' | ')],
+  ].concat(AG_JANELAS.map(n => {
+    const m = agMediaJanela([], n, hoje, inicioOperacao);
+    return ['Média de '+n+' meses', m.disponivel ? 'Disponível' : 'Disponível a partir de '+fmtData(m.aPartirDe)+' (célula em branco)'];
+  }));
+
+  const planilha = (aoa, largura, formatos) => {
+    const ws = XLSX.utils.aoa_to_sheet(aoa, { cellDates:true });
+    ws['!cols'] = largura.map(w => ({ wch:w }));
+    ws['!autofilter'] = { ref: XLSX.utils.encode_range({ s:{r:0,c:0}, e:{r:aoa.length-1, c:aoa[0].length-1} }) };
+    ws['!freeze'] = { xSplit:0, ySplit:1 };
+    for (let r = 1; r < aoa.length; r++) Object.keys(formatos).forEach(col => {
+      const cell = ws[XLSX.utils.encode_cell({ r, c:Number(col) })];
+      if (cell && (cell.t === 'n' || cell.t === 'd')) cell.z = formatos[col];
+    });
+    return ws;
+  };
+
+  const wb = XLSX.utils.book_new();
+  const f1 = { 7:FMT_DATA, 8:FMT_INT, 10:FMT_INT, 11:FMT_MOEDA, 12:FMT_MOEDA, 13:FMT_MOEDA, 14:FMT_MOEDA, 15:'0.0', 16:FMT_MOEDA, 18:FMT_MOEDA, 19:FMT_MOEDA, 20:FMT_MOEDA };
+  XLSX.utils.book_append_sheet(wb, planilha(aoa1, [14,12,34,18,18,22,14,14,14,16,12,16,16,16,16,14,16,14,18,18,18], f1), 'Clientes');
+  XLSX.utils.book_append_sheet(wb, planilha(aoa2, [14,12,34,18,18,14,10,14,20,16,14,16], { 5:FMT_DATA, 9:FMT_MOEDA, 10:FMT_MOEDA, 11:FMT_MOEDA }), 'Compras');
+  XLSX.utils.book_append_sheet(wb, planilha(aoa3, [14,34,10,14,16], { 3:FMT_INT, 4:FMT_MOEDA }), 'Resumo mensal');
+  const ws4 = XLSX.utils.aoa_to_sheet(aoa4, { cellDates:true });
+  ws4['!cols'] = [{ wch:34 }, { wch:70 }];
+  [1,2,3].forEach(r => { const cell = ws4[XLSX.utils.encode_cell({ r, c:1 })]; if (cell) cell.z = r === 1 ? 'dd/mm/yyyy hh:mm' : FMT_DATA; });
+  XLSX.utils.book_append_sheet(wb, ws4, 'Parâmetros');
+
+  XLSX.writeFile(wb, 'aging_clientes_'+hoje+'.xlsx');
 }
 
 function agAbrirCliente(freezerId){
