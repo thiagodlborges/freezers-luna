@@ -2738,7 +2738,7 @@ const AG_FAIXAS = [
   { id:'91+',   label:'91+ dias',   min:91, max:Infinity, cor:'#B43C3C' },
   { id:'nunca', label:'Nunca comprou', min:null, max:null, cor:'#9A8F85' },
 ];
-let agDados = null;       // { clientes, inicioOperacao, hoje }
+let agDados = null;       // { clientes, hoje }
 let agFaixaFiltro = '';
 let agClasseFiltro = '';
 let chartAgingFaixas = null, chartAgingCliente = null, chartAgingProd = null;
@@ -2776,23 +2776,20 @@ async function agBuscarTodos(montarQuery){
   return todos;
 }
 
-// Média mensal da janela de `n` meses: só existe se o módulo já tem `n` meses de histórico.
-function agMediaJanela(compras, n, hoje, inicioOperacao){
+// Média mensal da janela de `n` meses de UM freezer: o histórico conta a partir da primeira compra
+// dele, então só existe quando já se passaram `n` meses desde essa primeira compra.
+function agMediaJanela(compras, n, hoje, primeiraCompra){
+  if (!primeiraCompra) return { disponivel:false, aPartirDe:null };
   const inicioJanela = agSomaMeses(hoje, -n);
-  if (inicioJanela < inicioOperacao) return { disponivel:false, aPartirDe: agSomaMeses(inicioOperacao, n) };
-  const total = compras.filter(c => c.data > inicioJanela && c.data <= hoje).reduce((s,c) => s + c.valor, 0);
+  if (inicioJanela < primeiraCompra) return { disponivel:false, aPartirDe: agSomaMeses(primeiraCompra, n) };
+  const total = compras.filter(c => c.data >= inicioJanela && c.data <= hoje).reduce((s,c) => s + c.valor, 0);
   return { disponivel:true, media: total / n, total };
 }
 
 async function agCarregarDados(){
   const hoje = isoDateStr(new Date());
   const freezers = await carregarFreezers();
-  const [vendas, primeira] = await Promise.all([
-    agBuscarTodos(() => sb.from('freezer_visitas').select('id,freezer_id,data_visita,valor_bruto,valor_desconto,valor_liquido,numero_nota,forma_pagamento').eq('status_venda','efetivada').order('data_visita',{ascending:true}).order('id')),
-    sb.from('freezer_visitas').select('data_visita').order('data_visita',{ascending:true}).limit(1),
-  ]);
-  const primeiraData = primeira.data && primeira.data[0] ? primeira.data[0].data_visita : hoje;
-  const inicioOperacao = primeiraData.slice(0,7)+'-01';
+  const vendas = await agBuscarTodos(() => sb.from('freezer_visitas').select('id,freezer_id,data_visita,valor_bruto,valor_desconto,valor_liquido,numero_nota,forma_pagamento').eq('status_venda','efetivada').order('data_visita',{ascending:true}).order('id'));
 
   // Vendas antigas sem valor_liquido gravado: soma os itens
   const semValor = vendas.filter(v => v.valor_liquido == null);
@@ -2818,16 +2815,18 @@ async function agCarregarDados(){
     const brutoTotal = compras.reduce((s,c) => s + c.bruto, 0);
     const ultima = compras.length ? compras[compras.length-1].data : null;
     const dias = ultima ? agDiasEntre(ultima, hoje) : null;
-    const mesesOp = Math.max(1, agDiasEntre(inicioOperacao, hoje) / 30.4375);
+    // O histórico de cada freezer começa na sua primeira compra (mínimo de 1 mês, pra não inflar quem comprou agora)
+    const primeira = compras.length ? compras[0].data : null;
+    const mesesHist = primeira ? Math.max(1, agDiasEntre(primeira, hoje) / 30.4375) : 0;
     return {
       f, compras, total, n: compras.length, ticket: compras.length ? total / compras.length : 0,
-      ultima, dias, descTotal, brutoTotal,
+      primeira, ultima, dias, descTotal, brutoTotal, mesesHist,
       descPct: brutoTotal > 0 ? descTotal / brutoTotal * 100 : 0,
-      receitaMes: total / mesesOp,
-      medias: AG_JANELAS.map(n => agMediaJanela(compras, n, hoje, inicioOperacao)),
+      receitaMes: primeira ? total / mesesHist : 0,
+      medias: AG_JANELAS.map(n => agMediaJanela(compras, n, hoje, primeira)),
     };
   });
-  agDados = { clientes, inicioOperacao, hoje };
+  agDados = { clientes, hoje };
   return agDados;
 }
 
@@ -2843,7 +2842,7 @@ async function renderAging(){
   try { await agCarregarDados(); }
   catch (err){ $('mainContent').innerHTML = '<div class="card"><div class="empty">Erro ao carregar aging: '+esc(err.message||String(err))+'</div></div>'; return; }
 
-  const { clientes, inicioOperacao, hoje } = agDados;
+  const { clientes, hoje } = agDados;
   const ativos = clientes.filter(c => c.f.status === 'ativo');
   const comCompra = ativos.filter(c => c.n > 0);
   const totalReceita = clientes.reduce((s,c) => s + c.total, 0);
@@ -2852,10 +2851,8 @@ async function renderAging(){
   const mediaDias = comCompra.length ? comCompra.reduce((s,c) => s + c.dias, 0) / comCompra.length : 0;
   const criticos = ativos.filter(c => c.dias == null || c.dias > 90).length;
 
-  const avisos = AG_JANELAS.map((n, i) => {
-    const m = agMediaJanela([], n, hoje, inicioOperacao);
-    return m.disponivel ? '' : '<li>Média de '+n+' meses: disponível a partir de <strong>'+fmtData(m.aPartirDe)+'</strong></li>';
-  }).join('');
+  const dispo = AG_JANELAS.map((n, i) => comCompra.filter(c => c.medias[i].disponivel).length);
+  const avisos = AG_JANELAS.map((n, i) => '<li>Média de '+n+' meses: disponível para <strong>'+dispo[i]+' de '+comCompra.length+'</strong> freezers com compra</li>').join('');
 
   $('mainContent').innerHTML =
     '<div class="stat-box">'+
@@ -2872,11 +2869,11 @@ async function renderAging(){
     '</div>'+
     '<div class="card">'+
       '<h2 style="font-size:.95rem">Produtividade dos freezers — média mensal de compras</h2>'+
-      '<p class="hint">Média mensal = receita líquida das vendas efetivadas ÷ meses desde '+fmtData(inicioOperacao)+'. '+
+      '<p class="hint">Média mensal = receita líquida das vendas efetivadas ÷ meses desde a primeira compra de cada freezer (mínimo de 1 mês). '+
         AG_CLASSES.map(x => '<strong style="color:'+x.cor+'">'+x.label+'</strong>: '+x.regra).join(' · ')+'. Clique em uma barra para filtrar a lista.</p>'+
       '<div style="height:200px"><canvas id="chartAgingProd"></canvas></div>'+
     '</div>'+
-    (avisos ? '<div class="card" style="background:var(--creme)"><p class="hint" style="margin:0 0 6px"><strong>⏳ Histórico ainda em formação</strong> — o módulo tem dados desde '+fmtData(inicioOperacao)+'. Cada média só é calculada quando o histórico cobre a janela inteira:</p><ul class="hint" style="margin:0 0 0 18px">'+avisos+'</ul></div>' : '')+
+    (comCompra.length ? '<div class="card" style="background:var(--creme)"><p class="hint" style="margin:0 0 6px"><strong>⏳ Histórico ainda em formação</strong> — as médias contam a partir da primeira compra de cada freezer e as de 3, 6 e 12 meses só são calculadas quando o freezer já completou a janela inteira desde essa primeira compra:</p><ul class="hint" style="margin:0 0 0 18px">'+avisos+'</ul></div>' : '')+
     '<div class="card">'+
       '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">'+
         '<h2 style="margin:0">Clientes</h2>'+
@@ -2896,7 +2893,7 @@ async function renderAging(){
     '</div>'+
     '<div class="card">'+
       '<h2>Rentabilidade por freezer</h2>'+
-      '<p class="hint">Receita líquida (vendas efetivadas, já descontado o desconto comercial) por freezer desde '+fmtData(inicioOperacao)+'. O sistema ainda não registra custo dos itens vendidos, então a rentabilidade é medida pela receita líquida.</p>'+
+      '<p class="hint">Receita líquida (vendas efetivadas, já descontado o desconto comercial) por freezer. O sistema ainda não registra custo dos itens vendidos, então a rentabilidade é medida pela receita líquida.</p>'+
       '<div id="agRentab"></div>'+
     '</div>';
 
@@ -2971,7 +2968,7 @@ function agRenderTabela(){
     lista.map(c => {
       const fx = agFaixaDe(c);
       const pill = c.dias == null ? 'Nunca comprou' : c.dias+' dias';
-      const medias = c.medias.map(m => '<td>'+(m.disponivel ? fmtMoeda(m.media) : '<span style="color:var(--text-light)" title="Disponível a partir de '+fmtData(m.aPartirDe)+'">—</span>')+'</td>').join('');
+      const medias = c.medias.map(m => '<td>'+(m.disponivel ? fmtMoeda(m.media) : '<span style="color:var(--text-light)" title="'+(m.aPartirDe ? 'Disponível a partir de '+fmtData(m.aPartirDe) : 'Sem compras')+'">—</span>')+'</td>').join('');
       return '<tr style="cursor:pointer" onclick="agAbrirCliente(\''+c.f.id+'\')">'+
         '<td><strong>'+esc(c.f.ponto_venda)+'</strong>'+(c.f.rede?' <span style="font-size:.78rem;color:var(--text-light)">('+esc(c.f.rede)+')</span>':'')+'<div style="font-size:.74rem;color:var(--text-light)">Cód. '+esc(c.f.codigo_cliente||'—')+' · '+esc(c.f.cidade||'—')+'</div></td>'+
         '<td>'+fmtData(c.ultima)+'</td>'+
@@ -3002,18 +2999,18 @@ function agRenderRentabilidade(){
 // Exporta a base do aging em Excel (valores numéricos e datas reais, pra filtrar/pivotar/tratar à vontade).
 function agExportarExcel(){
   if (!agDados){ alert('Os dados do aging ainda não foram carregados.'); return; }
-  const { clientes, inicioOperacao, hoje } = agDados;
+  const { clientes, hoje } = agDados;
   const dt = iso => iso ? new Date(iso+'T12:00') : null;
   const FMT_DATA = 'dd/mm/yyyy', FMT_MOEDA = '#,##0.00', FMT_INT = '0';
 
   const cab1 = ['Cód. cliente','Cód. freezer','Ponto de venda','Rede','Cidade','Repositor','Status do freezer',
-    'Última compra','Dias desde a última compra','Faixa de aging','Nº de compras','Ticket médio (R$)',
+    'Última compra','Primeira compra','Meses de histórico','Dias desde a última compra','Faixa de aging','Nº de compras','Ticket médio (R$)',
     'Receita bruta (R$)','Desconto total (R$)','Receita líquida (R$)','Desconto médio (%)','Média mensal (R$)','Produtividade']
     .concat(AG_JANELAS.map(n => 'Média mensal '+n+'m (R$)'));
   const aoa1 = [cab1];
   clientes.forEach(c => aoa1.push([
     c.f.codigo_cliente||'', c.f.codigo||'', c.f.ponto_venda||'', c.f.rede||'', c.f.cidade||'', c.f.repositor_nome||'', labelStatus(c.f.status),
-    dt(c.ultima), c.dias, agFaixaDe(c).label, c.n, c.n ? c.ticket : null,
+    dt(c.ultima), dt(c.primeira), c.primeira ? c.mesesHist : null, c.dias, agFaixaDe(c).label, c.n, c.n ? c.ticket : null,
     c.brutoTotal, c.descTotal, c.total, c.descPct, c.receitaMes, agClasseDe(c).label,
   ].concat(c.medias.map(m => m.disponivel ? m.media : null))));
 
@@ -3032,17 +3029,13 @@ function agExportarExcel(){
   const aoa4 = [['Parâmetro','Valor'],
     ['Gerado em', new Date()],
     ['Data de referência do aging', dt(hoje)],
-    ['Início do histórico do módulo', dt(inicioOperacao)],
     ['Base das vendas', 'Vendas efetivadas (propostas não entram)'],
-    ['Média mensal', 'Receita líquida ÷ meses desde o início do histórico'],
+    ['Média mensal', 'Receita líquida ÷ meses desde a primeira compra de cada freezer (mínimo de 1 mês)'],
     ['Produtivo (média mensal)', '> R$ '+AG_LIMITE_PRODUTIVO],
     ['Moderado (média mensal)', 'R$ '+AG_LIMITE_MODERADO+' a R$ '+AG_LIMITE_PRODUTIVO],
     ['Improdutivo (média mensal)', '< R$ '+AG_LIMITE_MODERADO],
     ['Faixas de aging', AG_FAIXAS.map(x => x.label).join(' | ')],
-  ].concat(AG_JANELAS.map(n => {
-    const m = agMediaJanela([], n, hoje, inicioOperacao);
-    return ['Média de '+n+' meses', m.disponivel ? 'Disponível' : 'Disponível a partir de '+fmtData(m.aPartirDe)+' (célula em branco)'];
-  }));
+  ].concat(AG_JANELAS.map(n => ['Média de '+n+' meses', 'Calculada por freezer só depois de '+n+' meses desde a primeira compra dele (célula em branco antes disso)']));
 
   const planilha = (aoa, largura, formatos) => {
     const ws = XLSX.utils.aoa_to_sheet(aoa, { cellDates:true });
@@ -3057,13 +3050,13 @@ function agExportarExcel(){
   };
 
   const wb = XLSX.utils.book_new();
-  const f1 = { 7:FMT_DATA, 8:FMT_INT, 10:FMT_INT, 11:FMT_MOEDA, 12:FMT_MOEDA, 13:FMT_MOEDA, 14:FMT_MOEDA, 15:'0.0', 16:FMT_MOEDA, 18:FMT_MOEDA, 19:FMT_MOEDA, 20:FMT_MOEDA };
-  XLSX.utils.book_append_sheet(wb, planilha(aoa1, [14,12,34,18,18,22,14,14,14,16,12,16,16,16,16,14,16,14,18,18,18], f1), 'Clientes');
+  const f1 = { 7:FMT_DATA, 8:FMT_DATA, 9:'0.0', 10:FMT_INT, 12:FMT_INT, 13:FMT_MOEDA, 14:FMT_MOEDA, 15:FMT_MOEDA, 16:FMT_MOEDA, 17:'0.0', 18:FMT_MOEDA, 20:FMT_MOEDA, 21:FMT_MOEDA, 22:FMT_MOEDA };
+  XLSX.utils.book_append_sheet(wb, planilha(aoa1, [14,12,34,18,18,22,14,14,14,12,14,16,12,16,16,16,16,14,16,14,18,18,18], f1), 'Clientes');
   XLSX.utils.book_append_sheet(wb, planilha(aoa2, [14,12,34,18,18,14,10,14,20,16,14,16], { 5:FMT_DATA, 9:FMT_MOEDA, 10:FMT_MOEDA, 11:FMT_MOEDA }), 'Compras');
   XLSX.utils.book_append_sheet(wb, planilha(aoa3, [14,34,10,14,16], { 3:FMT_INT, 4:FMT_MOEDA }), 'Resumo mensal');
   const ws4 = XLSX.utils.aoa_to_sheet(aoa4, { cellDates:true });
   ws4['!cols'] = [{ wch:34 }, { wch:70 }];
-  [1,2,3].forEach(r => { const cell = ws4[XLSX.utils.encode_cell({ r, c:1 })]; if (cell) cell.z = r === 1 ? 'dd/mm/yyyy hh:mm' : FMT_DATA; });
+  [1,2].forEach(r => { const cell = ws4[XLSX.utils.encode_cell({ r, c:1 })]; if (cell) cell.z = r === 1 ? 'dd/mm/yyyy hh:mm' : FMT_DATA; });
   XLSX.utils.book_append_sheet(wb, ws4, 'Parâmetros');
 
   XLSX.writeFile(wb, 'aging_clientes_'+hoje+'.xlsx');
@@ -3074,7 +3067,7 @@ function agAbrirCliente(freezerId){
   if (!c) return;
   const f = c.f, fx = agFaixaDe(c);
   const mediaCard = (n, m) => '<div class="stat"><div class="num" style="font-size:1.4rem">'+(m.disponivel ? fmtMoeda(m.media) : '—')+'</div><div class="lbl">Média mensal — '+(n===12?'último ano':'últimos '+n+' meses')+'</div>'+
-    (m.disponivel ? '' : '<div class="hint" style="margin:4px 0 0">Disponível a partir de '+fmtData(m.aPartirDe)+'</div>')+'</div>';
+    (m.disponivel ? '' : '<div class="hint" style="margin:4px 0 0">'+(m.aPartirDe ? 'Disponível a partir de '+fmtData(m.aPartirDe) : 'Sem compras ainda')+'</div>')+'</div>';
 
   $('modalAgingConteudo').innerHTML =
     '<h3>'+esc(f.ponto_venda)+(f.rede?' <span style="font-size:.85rem;color:var(--text-light)">('+esc(f.rede)+')</span>':'')+'</h3>'+
@@ -3083,7 +3076,7 @@ function agAbrirCliente(freezerId){
       '<div class="stat"><div class="num" style="font-size:1.4rem">'+fmtData(c.ultima)+'</div><div class="lbl">Última compra</div>'+(c.dias!=null?'<div class="hint" style="margin:4px 0 0;color:'+fx.cor+'">há '+c.dias+' dias</div>':'')+'</div>'+
       '<div class="stat"><div class="num" style="font-size:1.4rem">'+(c.n?fmtMoeda(c.ticket):'—')+'</div><div class="lbl">Ticket médio ('+c.n+' compra'+(c.n===1?'':'s')+')</div></div>'+
       '<div class="stat"><div class="num" style="font-size:1.4rem">'+fmtMoeda(c.total)+'</div><div class="lbl">Receita líquida total</div></div>'+
-      '<div class="stat"><div class="num" style="font-size:1.4rem">'+fmtMoeda(c.receitaMes)+'</div><div class="lbl">Média mensal de compras (desde '+fmtData(agDados.inicioOperacao)+')</div><div class="hint" style="margin:4px 0 0;color:'+agClasseDe(c).cor+'">'+agClasseDe(c).label+'</div></div>'+
+      '<div class="stat"><div class="num" style="font-size:1.4rem">'+fmtMoeda(c.receitaMes)+'</div><div class="lbl">Média mensal de compras'+(c.primeira ? ' (desde a 1ª compra, '+fmtData(c.primeira)+')' : '')+'</div><div class="hint" style="margin:4px 0 0;color:'+agClasseDe(c).cor+'">'+agClasseDe(c).label+'</div></div>'+
     '</div>'+
     '<div class="stat-box" style="gap:14px">'+AG_JANELAS.map((n,i) => mediaCard(n, c.medias[i])).join('')+'</div>'+
     (c.n ? '<div style="height:150px;margin-bottom:14px"><canvas id="chartAgingCliente"></canvas></div>' : '')+
