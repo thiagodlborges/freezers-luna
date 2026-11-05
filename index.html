@@ -1720,6 +1720,7 @@ async function renderPainel(){
       '<div class="stat"><div class="num">'+totalVisitasMes+'</div><div class="lbl">Visitas em '+mesLabel+'</div></div>'+
       '<div class="stat"><div class="num" style="color:#D9B96A">'+fmtMoeda(totalPropostaMes)+'</div><div class="lbl">Proposta ('+mesLabel+')</div></div>'+
       '<div class="stat"><div class="num" style="color:#6B1E2E">'+fmtMoeda(totalEfetivadaMes)+'</div><div class="lbl">Efetivada ('+mesLabel+')</div></div>'+
+      '<div class="stat"><div class="num" style="color:#4A1220">'+fmtMoeda(totalPropostaMes + totalEfetivadaMes)+'</div><div class="lbl">Total Proposta + Efetivada ('+mesLabel+')</div></div>'+
       '<div class="stat"><div class="num" style="color:'+(propostasPendentes?'#B8860B':'#2E7D32')+'">'+propostasPendentes+'</div><div class="lbl">Propostas não efetivadas</div></div>'+
       '<div class="stat"><div class="num" style="color:'+(risco.length?'#B43C3C':'#2E7D32')+'">'+risco.length+'</div><div class="lbl">Freezers com risco de falha</div></div>'+
     '</div>'+
@@ -1856,7 +1857,7 @@ function desenharGraficosPainel(serie, ranking){
       { label:'Efetivada (venda confirmada)', data: serie.map(d=>Number(d.valor_efetivada)), backgroundColor:'#6B1E2E', stack:'v' },
     ] },
     options: { responsive:true, maintainAspectRatio:false,
-      plugins:{ legend:{display:true, position:'bottom', labels:{boxWidth:12,font:{size:10}}}, tooltip:{ callbacks:{ label: (ctx)=>ctx.dataset.label+': '+fmtMoeda(ctx.parsed.y) } } },
+      plugins:{ legend:{display:true, position:'bottom', labels:{boxWidth:12,font:{size:10}}}, tooltip:{ callbacks:{ label: (ctx)=>ctx.dataset.label+': '+fmtMoeda(ctx.parsed.y), footer: (items)=>'Total do dia: '+fmtMoeda(items.reduce((t,i)=>t+i.parsed.y,0)) } } },
       scales:{ x:{stacked:true}, y:{ stacked:true, beginAtZero:true, ticks:{ callback:(v)=>fmtMoeda(v) } } } },
   });
 
@@ -2800,6 +2801,7 @@ const AG_FAIXAS = [
 let agDados = null;       // { clientes, hoje }
 let agFaixaFiltro = '';
 let agClasseFiltro = '';
+let agSubTab = 'clientes';
 let chartAgingFaixas = null, chartAgingCliente = null, chartAgingProd = null;
 // Produtividade pela média mensal de compras: > 1200 produtivo; 650–1200 moderado; < 650 improdutivo
 const AG_LIMITE_PRODUTIVO = 1200, AG_LIMITE_MODERADO = 650;
@@ -2917,6 +2919,7 @@ async function renderAging(){
   $('mainContent').innerHTML = '<div class="loading">Carregando…</div>';
   agFaixaFiltro = '';
   agClasseFiltro = '';
+  agSubTab = 'clientes';
   try { await agCarregarDados(); }
   catch (err){ $('mainContent').innerHTML = '<div class="card"><div class="empty">Erro ao carregar aging: '+esc(err.message||String(err))+'</div></div>'; return; }
 
@@ -2940,6 +2943,11 @@ async function renderAging(){
       '<div class="stat"><div class="num">'+fmtMoeda(ticketGeral)+'</div><div class="lbl">Ticket médio geral</div></div>'+
       '<div class="stat"><div class="num">'+Math.round(mediaDias)+'</div><div class="lbl">Média de dias desde a última compra</div></div>'+
     '</div>'+
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">'+
+      '<button class="btn btn-sm" id="agBtnClientes" onclick="agMudarSubTab(\'clientes\')">👥 Clientes</button>'+
+      '<button class="btn btn-outline btn-sm" id="agBtnRentab" onclick="agMudarSubTab(\'rentabilidade\')">💰 Rentabilidade por freezer</button>'+
+    '</div>'+
+    '<div id="agPainelClientes">'+
     '<div class="card">'+
       '<h2 style="font-size:.95rem">Aging — clientes ativos por tempo desde a última compra</h2>'+
       '<p class="hint">Considera vendas efetivadas. Clique em uma faixa para filtrar a lista.</p>'+
@@ -2969,16 +2977,30 @@ async function renderAging(){
       '<div id="agFiltroAtivo" style="margin-top:8px"></div>'+
       '<div id="agTabela" style="margin-top:10px"></div>'+
     '</div>'+
+    '</div>'+
+    '<div id="agPainelRentab" style="display:none">'+
     '<div class="card">'+
-      '<h2>Rentabilidade por freezer</h2>'+
-      '<p class="hint">Receita líquida (vendas efetivadas, já descontado o desconto comercial) por freezer. O sistema ainda não registra custo dos itens vendidos, então a rentabilidade é medida pela receita líquida.</p>'+
+      '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">'+
+        '<h2 style="margin:0">Rentabilidade por freezer</h2>'+
+        '<button class="btn-outline btn btn-sm" onclick="agExportarExcel()" title="Baixa todos os clientes, compras e parâmetros em Excel">📥 Exportar Excel</button>'+
+      '</div>'+
+      '<p class="hint">Receita líquida (vendas efetivadas e vendas confirmadas da Loja de Fábrica, já descontado o desconto comercial) por freezer. O sistema ainda não registra custo dos itens vendidos, então a rentabilidade é medida pela receita líquida.</p>'+
       '<div id="agRentab"></div>'+
+    '</div>'+
     '</div>';
 
   agDesenharFaixas(ativos);
   agDesenharProdutividade(ativos);
   agRenderTabela();
   agRenderRentabilidade();
+}
+
+function agMudarSubTab(tab){
+  agSubTab = tab;
+  $('agPainelClientes').style.display = tab === 'clientes' ? '' : 'none';
+  $('agPainelRentab').style.display = tab === 'rentabilidade' ? '' : 'none';
+  $('agBtnClientes').classList.toggle('btn-outline', tab !== 'clientes');
+  $('agBtnRentab').classList.toggle('btn-outline', tab !== 'rentabilidade');
 }
 
 function agDesenharFaixas(ativos){
