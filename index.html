@@ -1412,6 +1412,7 @@ async function salvarEfetivacao(){
 async function renderHistorico(){
   $('mainContent').innerHTML = '<div class="loading">Carregando…</div>';
   const freezers = freezersCache.length ? freezersCache : await carregarFreezers();
+  const { data: lojasFab } = await sb.from('freezer_lojafab').select('id,nome').eq('ativo', true).order('nome');
 
   $('mainContent').innerHTML =
     '<div class="card">'+
@@ -1419,6 +1420,7 @@ async function renderHistorico(){
         '<div class="field" style="flex:1"><label>Freezer</label><select class="inp" id="histFreezer" onchange="histNovoFiltro()">'+
           '<option value="">Todos os meus freezers</option>'+
           freezers.map(f => '<option value="'+f.id+'">'+esc(f.ponto_venda)+' — '+esc(f.codigo)+'</option>').join('')+
+          (lojasFab||[]).map(l => '<option value="lf:'+l.id+'">🏪 Loja de Fábrica — '+esc(l.nome)+'</option>').join('')+
         '</select></div>'+
       '</div>'+
       '<div id="histConteudo"><div class="loading">Carregando…</div></div>'+
@@ -1444,20 +1446,45 @@ async function carregarHistorico(){
     new Promise((_, reject) => setTimeout(() => reject(new Error('Tempo esgotado ao carregar o histórico. Verifique sua conexão e tente novamente.')), ms))
   ]);
 
-  let visitas, itens;
+  // Vendas da Loja de Fábrica (contagens confirmadas) entram no histórico como receita, junto das visitas.
+  const filtroLojaFab = freezerId.startsWith('lf:') ? freezerId.slice(3) : null;
+  let visitas, itens, vendasLf = [], itensLf = [];
   try {
-    let query = sb.from('freezer_visitas').select('*, freezers(ponto_venda, rede, codigo, codigo_cliente, endereco, cidade)').order('data_visita', { ascending:false }).order('criado_em', { ascending:false }).limit(histLimite);
-    if (freezerId) query = query.eq('freezer_id', freezerId);
-    const resultado = await comTimeout(query, 15000);
-    if (resultado.error) throw resultado.error;
-    visitas = resultado.data;
+    visitas = [];
+    if (!filtroLojaFab){
+      let query = sb.from('freezer_visitas').select('*, freezers(ponto_venda, rede, codigo, codigo_cliente, endereco, cidade)').order('data_visita', { ascending:false }).order('criado_em', { ascending:false }).limit(histLimite);
+      if (freezerId) query = query.eq('freezer_id', freezerId);
+      const resultado = await comTimeout(query, 15000);
+      if (resultado.error) throw resultado.error;
+      visitas = resultado.data || [];
+    }
 
-    if (!visitas || !visitas.length){ $('histConteudo').innerHTML = '<div class="empty">Nenhuma visita registrada ainda.</div>'; return; }
+    if (filtroLojaFab || !freezerId){
+      let qLf = sb.from('freezer_lojafab_contagens').select('*, freezer_lojafab(nome)').eq('status','confirmada').order('data_contagem', { ascending:false }).order('criado_em', { ascending:false }).limit(histLimite);
+      if (filtroLojaFab) qLf = qLf.eq('freezer_id', filtroLojaFab);
+      const rLf = await comTimeout(qLf, 15000);
+      if (rLf.error) throw rLf.error;
+      vendasLf = rLf.data || [];
+      // Paginação: com mais visitas por carregar, só mostra vendas até a data da visita mais antiga já listada
+      if (!filtroLojaFab && visitas.length >= histLimite){
+        const maisAntiga = visitas[visitas.length-1].data_visita;
+        vendasLf = vendasLf.filter(c => c.data_contagem >= maisAntiga);
+      }
+      if (vendasLf.length){
+        const rItensLf = await comTimeout(sb.from('freezer_lojafab_contagem_itens').select('*').in('contagem_id', vendasLf.map(c => c.id)).gt('qtd_vendida', 0), 15000);
+        if (rItensLf.error) throw rItensLf.error;
+        itensLf = rItensLf.data || [];
+      }
+    }
 
-    const visitaIds = visitas.map(v => v.id);
-    const resultadoItens = await comTimeout(sb.from('freezer_visita_itens').select('*').in('visita_id', visitaIds), 15000);
-    if (resultadoItens.error) throw resultadoItens.error;
-    itens = resultadoItens.data;
+    if (!visitas.length && !vendasLf.length){ $('histConteudo').innerHTML = '<div class="empty">Nenhuma visita ou venda registrada ainda.</div>'; return; }
+
+    if (visitas.length){
+      const visitaIds = visitas.map(v => v.id);
+      const resultadoItens = await comTimeout(sb.from('freezer_visita_itens').select('*').in('visita_id', visitaIds), 15000);
+      if (resultadoItens.error) throw resultadoItens.error;
+      itens = resultadoItens.data;
+    }
   } catch (err) {
     $('histConteudo').innerHTML = '<div class="empty">Erro ao carregar histórico: '+esc(err.message || String(err))+' <button class="btn-outline btn btn-sm" style="margin-left:8px" onclick="carregarHistorico()">Tentar de novo</button></div>';
     return;
@@ -1466,7 +1493,33 @@ async function carregarHistorico(){
   const itensPorVisita = {};
   (itens||[]).forEach(it => { (itensPorVisita[it.visita_id] = itensPorVisita[it.visita_id]||[]).push(it); });
 
-  $('histConteudo').innerHTML = visitas.map(v => {
+  const itensLfPorContagem = {};
+  itensLf.forEach(it => { (itensLfPorContagem[it.contagem_id] = itensLfPorContagem[it.contagem_id]||[]).push(it); });
+
+  const htmlVendaLf = c => {
+    const seusItens = itensLfPorContagem[c.id] || [];
+    return (
+      '<div class="visita-item">'+
+        '<div class="visita-head">'+
+          '<div>'+
+            '<strong>'+esc(c.freezer_lojafab ? c.freezer_lojafab.nome : '—')+'</strong> — '+fmtData(c.data_contagem)+
+            '<div style="font-size:.76rem;color:var(--text-light)">Responsável: '+esc(c.responsavel_nome||'—')+(c.confirmado_por_nome ? ' · Confirmado por '+esc(c.confirmado_por_nome) : '')+'</div>'+
+          '</div>'+
+          '<div style="display:flex;gap:6px;flex-wrap:wrap">'+
+            '<span class="flag-pill on" style="background:var(--creme);color:var(--bordo-dark);font-weight:600">🏪 Loja de Fábrica</span>'+
+            '<span class="flag-pill on" style="background:#E7F3E8;color:#2E7D32;font-weight:600">✅ Venda confirmada'+(c.forma_pagamento ? ' — '+esc(c.forma_pagamento) : '')+'</span>'+
+          '</div>'+
+        '</div>'+
+        (c.observacoes ? '<p style="font-size:.8rem;margin-top:8px">'+esc(c.observacoes)+'</p>' : '')+
+        '<div class="table-wrap" style="margin-top:10px"><table><thead><tr><th>Produto</th><th>Qtd vendida</th><th>Valor unit.</th><th>Total</th></tr></thead><tbody>'+
+          seusItens.map(it => '<tr><td>'+esc(it.produto_nome)+'</td><td>'+it.qtd_vendida+'</td><td>'+fmtMoeda(it.preco_unit)+'</td><td>'+fmtMoeda(it.qtd_vendida*it.preco_unit)+'</td></tr>').join('')+
+          '<tr><td colspan="3" style="text-align:right;font-weight:700">Receita confirmada</td><td style="font-weight:700">'+fmtMoeda(c.valor_confirmado)+'</td></tr>'+
+        '</tbody></table></div>'+
+      '</div>'
+    );
+  };
+
+  const htmlVisita = v => {
     const seusItens = itensPorVisita[v.id] || [];
     return (
       '<div class="visita-item">'+
@@ -1513,7 +1566,13 @@ async function carregarHistorico(){
         '</tbody></table></div>' : '')+
       '</div>'
     );
-  }).join('') + (visitas.length >= histLimite
+  };
+
+  const entradas = visitas.map(v => ({ data:v.data_visita, criado:v.criado_em||'', html:htmlVisita(v) }))
+    .concat(vendasLf.map(c => ({ data:c.data_contagem, criado:c.criado_em||'', html:htmlVendaLf(c) })));
+  entradas.sort((a,b) => (b.data+b.criado).localeCompare(a.data+a.criado));
+
+  $('histConteudo').innerHTML = entradas.map(e => e.html).join('') + ((visitas.length >= histLimite || vendasLf.length >= histLimite)
     ? '<div style="text-align:center;margin:14px 0"><button class="btn-outline btn" onclick="histCarregarMais()">Carregar mais</button></div>'
     : '');
 }
@@ -2786,6 +2845,23 @@ function agMediaJanela(compras, n, hoje, primeiraCompra){
   return { disponivel:true, media: total / n, total };
 }
 
+// Vendas da Loja de Fábrica (contagens confirmadas): cada freezer de fábrica entra no aging como um cliente próprio,
+// com a receita = valor confirmado da contagem.
+async function agCarregarLojaFab(){
+  try {
+    const { data: lojas, error } = await sb.from('freezer_lojafab').select('id,nome,ativo');
+    if (error || !lojas || !lojas.length) return [];
+    const contagens = await agBuscarTodos(() => sb.from('freezer_lojafab_contagens').select('id,freezer_id,data_contagem,valor_confirmado,forma_pagamento').eq('status','confirmada').order('data_contagem',{ascending:true}).order('id'));
+    return lojas.map(l => {
+      const compras = contagens.filter(c => c.freezer_id === l.id).map(c => {
+        const valor = Number(c.valor_confirmado)||0;
+        return { id:c.id, data:c.data_contagem, bruto:valor, desconto:0, valor, nota:null, pagamento:c.forma_pagamento };
+      });
+      return { f:{ id:'lf:'+l.id, ponto_venda:l.nome, rede:'Loja de Fábrica', codigo:'Loja de Fábrica', codigo_cliente:null, cidade:null, repositor_nome:null, status:l.ativo ? 'ativo' : 'retirado', origem:'lojafab' }, compras };
+    }).filter(x => x.compras.length);
+  } catch (err) { return []; } // sem acesso às tabelas da Loja de Fábrica: segue só com as vendas de freezers
+}
+
 async function agCarregarDados(){
   const hoje = isoDateStr(new Date());
   const freezers = await carregarFreezers();
@@ -2808,8 +2884,10 @@ async function agCarregarDados(){
     (porFreezer[v.freezer_id] = porFreezer[v.freezer_id] || []).push({ id:v.id, data:v.data_visita, bruto, desconto, valor, nota:v.numero_nota, pagamento:v.forma_pagamento });
   });
 
-  const clientes = freezers.map(f => {
-    const compras = porFreezer[f.id] || [];
+  const lojaFab = await agCarregarLojaFab();
+  const base = freezers.map(f => ({ f, compras: porFreezer[f.id] || [] })).concat(lojaFab);
+
+  const clientes = base.map(({ f, compras }) => {
     const total = compras.reduce((s,c) => s + c.valor, 0);
     const descTotal = compras.reduce((s,c) => s + c.desconto, 0);
     const brutoTotal = compras.reduce((s,c) => s + c.bruto, 0);
