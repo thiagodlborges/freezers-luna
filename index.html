@@ -2808,7 +2808,27 @@ async function agCarregarDados(){
     (porFreezer[v.freezer_id] = porFreezer[v.freezer_id] || []).push({ id:v.id, data:v.data_visita, bruto, desconto, valor, nota:v.numero_nota, pagamento:v.forma_pagamento });
   });
 
-  const clientes = freezers.map(f => {
+  // Loja de Fábrica (ex.: Freezer Comm): a venda é a diferença de estoque das contagens
+  // (qtd_vendida × preço), não há visita/NF — entra no aging como compra na data da contagem.
+  const lojaFab = [];
+  try {
+    const lfs = await carregarFreezersLojaFab();
+    const { data: lfCont, error: lfErr } = await sb.from('freezer_lojafab_contagens')
+      .select('id,freezer_id,data_contagem,forma_pagamento,status,freezer_lojafab_contagem_itens(qtd_vendida,preco_unit)')
+      .in('status', ['proposta','confirmada']).order('data_contagem',{ascending:true});
+    if (lfErr) throw lfErr;
+    lfs.forEach(lf => {
+      const f = { id:lf.id, ponto_venda:lf.nome, rede:'Loja de Fábrica', status:'ativo', codigo:'LOJAFAB', codigo_cliente:'LOJAFAB', endereco:null, cidade:null, _lojafab:true };
+      const compras = (lfCont||[]).filter(c => c.freezer_id === lf.id).map(c => {
+        const valor = (c.freezer_lojafab_contagem_itens||[]).reduce((t,i) => t + (Number(i.qtd_vendida)||0) * (Number(i.preco_unit)||0), 0);
+        return { id:c.id, data:c.data_contagem, bruto:valor, desconto:0, valor, nota:null, pagamento:c.forma_pagamento };
+      }).filter(c => c.valor > 0);
+      lojaFab.push({ f, compras });
+    });
+  } catch (e) { console.warn('Aging: vendas da Loja de Fábrica indisponíveis', e); }
+  lojaFab.forEach(x => { porFreezer[x.f.id] = x.compras; });
+
+  const clientes = freezers.concat(lojaFab.map(x => x.f)).map(f => {
     const compras = porFreezer[f.id] || [];
     const total = compras.reduce((s,c) => s + c.valor, 0);
     const descTotal = compras.reduce((s,c) => s + c.desconto, 0);
