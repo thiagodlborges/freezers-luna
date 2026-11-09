@@ -2966,11 +2966,23 @@ async function renderAging(){
         '<div style="display:flex;gap:8px;flex-wrap:wrap">'+
           '<button class="btn-outline btn btn-sm" onclick="agExportarExcel()" title="Baixa todos os clientes, compras e parâmetros em Excel">📥 Exportar Excel</button>'+
           '<input class="inp" id="agBusca" placeholder="Buscar cliente, código, rede ou cidade…" style="min-width:240px" oninput="agRenderTabela()">'+
+          '<select class="inp" id="agFaixaSel" onchange="agFaixaFiltro=this.value;agRenderTabela()" title="Filtrar por faixa de aging">'+
+            '<option value="">Todas as faixas</option>'+AG_FAIXAS.map(x => '<option value="'+x.id+'">'+x.label+'</option>').join('')+
+          '</select>'+
+          '<select class="inp" id="agClasseSel" onchange="agClasseFiltro=this.value;agRenderTabela()" title="Filtrar por produtividade">'+
+            '<option value="">Toda produtividade</option>'+AG_CLASSES.map(x => '<option value="'+x.id+'">'+x.label+'</option>').join('')+
+          '</select>'+
           '<select class="inp" id="agOrdem" onchange="agRenderTabela()">'+
             '<option value="dias">Mais tempo sem comprar</option>'+
+            '<option value="diasAsc">Compra mais recente</option>'+
+            '<option value="mediaMes">Maior média mensal</option>'+
+            '<option value="mediaMesAsc">Menor média mensal</option>'+
             '<option value="total">Maior receita</option>'+
+            '<option value="totalAsc">Menor receita</option>'+
             '<option value="ticket">Maior ticket médio</option>'+
-            '<option value="nome">Nome</option>'+
+            '<option value="ticketAsc">Menor ticket médio</option>'+
+            '<option value="compras">Mais compras</option>'+
+            '<option value="nome">Nome (A–Z)</option>'+
           '</select>'+
         '</div>'+
       '</div>'+
@@ -2982,7 +2994,22 @@ async function renderAging(){
     '<div class="card">'+
       '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">'+
         '<h2 style="margin:0">Rentabilidade por freezer</h2>'+
-        '<button class="btn-outline btn btn-sm" onclick="agExportarExcel()" title="Baixa todos os clientes, compras e parâmetros em Excel">📥 Exportar Excel</button>'+
+        '<div style="display:flex;gap:8px;flex-wrap:wrap">'+
+          '<button class="btn-outline btn btn-sm" onclick="agExportarExcel()" title="Baixa todos os clientes, compras e parâmetros em Excel">📥 Exportar Excel</button>'+
+          '<input class="inp" id="agRtBusca" placeholder="Buscar freezer ou cliente…" style="min-width:200px" oninput="agRenderRentabilidade()">'+
+          '<select class="inp" id="agRtClasse" onchange="agRenderRentabilidade()" title="Filtrar por produtividade">'+
+            '<option value="">Toda produtividade</option>'+AG_CLASSES.map(x => '<option value="'+x.id+'">'+x.label+'</option>').join('')+
+          '</select>'+
+          '<select class="inp" id="agRtOrdem" onchange="agRenderRentabilidade()">'+
+            '<option value="total">Maior receita</option>'+
+            '<option value="totalAsc">Menor receita</option>'+
+            '<option value="mediaMes">Maior média mensal</option>'+
+            '<option value="mediaMesAsc">Menor média mensal</option>'+
+            '<option value="desc">Maior desconto médio</option>'+
+            '<option value="descAsc">Menor desconto médio</option>'+
+            '<option value="nome">Nome (A–Z)</option>'+
+          '</select>'+
+        '</div>'+
       '</div>'+
       '<p class="hint">Receita líquida (vendas efetivadas e vendas confirmadas da Loja de Fábrica, já descontado o desconto comercial) por freezer. O sistema ainda não registra custo dos itens vendidos, então a rentabilidade é medida pela receita líquida.</p>'+
       '<div id="agRentab"></div>'+
@@ -3049,11 +3076,19 @@ function agRenderTabela(){
 
   const cmp = {
     dias:   (a,b) => (b.dias == null ? Infinity : b.dias) - (a.dias == null ? Infinity : a.dias),
+    diasAsc:(a,b) => (a.dias == null ? Infinity : a.dias) - (b.dias == null ? Infinity : b.dias),
+    mediaMes:    (a,b) => b.receitaMes - a.receitaMes,
+    mediaMesAsc: (a,b) => a.receitaMes - b.receitaMes,
     total:  (a,b) => b.total - a.total,
+    totalAsc: (a,b) => a.total - b.total,
     ticket: (a,b) => b.ticket - a.ticket,
+    ticketAsc: (a,b) => a.ticket - b.ticket,
+    compras: (a,b) => b.n - a.n,
     nome:   (a,b) => (a.f.ponto_venda||'').localeCompare(b.f.ponto_venda||'', 'pt-BR'),
   }[ordem];
   lista.sort(cmp);
+  if ($('agFaixaSel')) $('agFaixaSel').value = agFaixaFiltro;
+  if ($('agClasseSel')) $('agClasseSel').value = agClasseFiltro;
 
   const fx = agFaixaFiltro ? AG_FAIXAS.find(x => x.id === agFaixaFiltro) : null;
   const cl = agClasseFiltro ? AG_CLASSES.find(x => x.id === agClasseFiltro) : null;
@@ -3081,9 +3116,21 @@ function agRenderTabela(){
 }
 
 function agRenderRentabilidade(){
-  const lista = agDados.clientes.filter(c => c.n > 0).sort((a,b) => b.total - a.total);
-  const totalGeral = lista.reduce((s,c) => s + c.total, 0);
-  if (!lista.length){ $('agRentab').innerHTML = '<div class="empty">Nenhuma venda efetivada ainda.</div>'; return; }
+  const todos = agDados.clientes.filter(c => c.n > 0);
+  const totalGeral = todos.reduce((s,c) => s + c.total, 0);
+  const busca = ($('agRtBusca').value||'').trim().toLowerCase();
+  const classe = $('agRtClasse').value;
+  let lista = todos;
+  if (classe) lista = lista.filter(c => agClasseDe(c).id === classe);
+  if (busca) lista = lista.filter(c => [c.f.ponto_venda, c.f.codigo, c.f.codigo_cliente, c.f.rede, c.f.cidade].some(x => (x||'').toLowerCase().includes(busca)));
+  lista = lista.slice().sort({
+    total:(a,b) => b.total - a.total, totalAsc:(a,b) => a.total - b.total,
+    mediaMes:(a,b) => b.receitaMes - a.receitaMes, mediaMesAsc:(a,b) => a.receitaMes - b.receitaMes,
+    desc:(a,b) => b.descPct - a.descPct, descAsc:(a,b) => a.descPct - b.descPct,
+    nome:(a,b) => (a.f.ponto_venda||'').localeCompare(b.f.ponto_venda||'', 'pt-BR'),
+  }[$('agRtOrdem').value]);
+  if (!todos.length){ $('agRentab').innerHTML = '<div class="empty">Nenhuma venda efetivada ainda.</div>'; return; }
+  if (!lista.length){ $('agRentab').innerHTML = '<div class="empty">Nenhum freezer encontrado com esses filtros.</div>'; return; }
   $('agRentab').innerHTML =
     '<div class="table-wrap"><table><thead><tr><th>#</th><th>Freezer / Cliente</th><th>Receita líquida</th><th>% do total</th><th>Média mensal</th><th>Produtividade</th><th>Desconto médio</th></tr></thead><tbody>'+
     lista.map((c, i) => '<tr style="cursor:pointer" onclick="agAbrirCliente(\''+c.f.id+'\')"><td>'+(i+1)+'</td>'+
