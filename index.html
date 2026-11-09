@@ -3030,6 +3030,13 @@ function agMudarSubTab(tab){
   $('agBtnRentab').classList.toggle('btn-outline', tab !== 'rentabilidade');
 }
 
+// Plugin: escreve o valor absoluto acima de cada barra (aparece nas capturas de tela)
+const agRotuloBarras = { id:'agRotuloBarras', afterDatasetsDraw(chart){
+  const { ctx } = chart; ctx.save();
+  ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'bottom'; ctx.fillStyle = '#3a2a24';
+  chart.getDatasetMeta(0).data.forEach((bar, i) => ctx.fillText(String(chart.data.datasets[0].data[i]), bar.x, bar.y - 4));
+  ctx.restore();
+}};
 function agDesenharFaixas(ativos){
   const contagem = AG_FAIXAS.map(x => ativos.filter(c => agFaixaDe(c).id === x.id).length);
   const ctx = document.getElementById('chartAgingFaixas');
@@ -3037,8 +3044,9 @@ function agDesenharFaixas(ativos){
   chartAgingFaixas = new Chart(ctx, {
     type:'bar',
     data:{ labels: AG_FAIXAS.map(x => x.label), datasets:[{ label:'Clientes', data: contagem, backgroundColor: AG_FAIXAS.map(x => x.cor), borderRadius:5 }] },
-    options:{ responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}},
-      scales:{ y:{ beginAtZero:true, ticks:{precision:0} } },
+    plugins:[agRotuloBarras],
+    options:{ responsive:true, maintainAspectRatio:false, layout:{padding:{top:20}}, plugins:{legend:{display:false}},
+      scales:{ y:{ beginAtZero:true, grace:'10%', ticks:{precision:0} } },
       onClick:(_, els) => { if (els.length) agFiltrarFaixa(AG_FAIXAS[els[0].index].id); } },
   });
 }
@@ -3050,8 +3058,9 @@ function agDesenharProdutividade(ativos){
   chartAgingProd = new Chart(ctx, {
     type:'bar',
     data:{ labels: AG_CLASSES.map(x => x.label+' ('+x.regra+')'), datasets:[{ label:'Freezers', data: contagem, backgroundColor: AG_CLASSES.map(x => x.cor), borderRadius:5 }] },
-    options:{ responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}},
-      scales:{ y:{ beginAtZero:true, ticks:{precision:0} } },
+    plugins:[agRotuloBarras],
+    options:{ responsive:true, maintainAspectRatio:false, layout:{padding:{top:20}}, plugins:{legend:{display:false}},
+      scales:{ y:{ beginAtZero:true, grace:'10%', ticks:{precision:0} } },
       onClick:(_, els) => { if (els.length) agFiltrarClasse(AG_CLASSES[els[0].index].id); } },
   });
 }
