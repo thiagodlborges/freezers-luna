@@ -544,12 +544,18 @@ let produtosSimplesCache = [];
 // do mais caro para o mais barato dentro de cada grupo.
 const ORDEM_GRUPOS_PRECO = [['Luna','Picolés'],['Luna','Potes'],['Yeez','Picolés'],['Yeez','Potes']];
 function tipoPorNome(nome){ return /^pote/i.test(nome||'') ? 'Potes' : 'Picolés'; }
+// Categorias padrão (Picolé/Pote) seguem a regra antiga, pelo nome; qualquer outra categoria (ex: "Caixa 10L",
+// cadastrada na Operação de Distribuição da Precificação) vira um grupo próprio.
+function categoriaPadraoSimples(c){ return /^(picol[eé]s?|potes?)?$/i.test((c||'').trim()); }
+function tipoSimples(p){ return categoriaPadraoSimples(p.categoria) ? tipoPorNome(p.nome) : p.categoria.trim(); }
 function marcaSimples(p){ return /yeez/i.test(p.marca||'') || /yeez/i.test(p.nome||'') ? 'Yeez' : 'Luna'; }
 function agruparPorLinhaETipo(itens, getMarca, getTipo, getPreco){
-  const grupos = ORDEM_GRUPOS_PRECO.map(([m,t]) => ({ marca: m, tipo: t, titulo: m.toUpperCase()+' — '+t, itens: [] }));
+  const ordem = ORDEM_GRUPOS_PRECO.slice();
+  itens.forEach(it => { const m = getMarca(it), t = getTipo(it); if (!ordem.some(([om,ot]) => om === m && ot === t)) ordem.push([m,t]); });
+  const grupos = ordem.map(([m,t]) => ({ marca: m, tipo: t, titulo: m.toUpperCase()+' — '+t, itens: [] }));
   itens.forEach(it => {
-    const idx = ORDEM_GRUPOS_PRECO.findIndex(([m,t]) => m === getMarca(it) && t === getTipo(it));
-    grupos[idx >= 0 ? idx : 0].itens.push(it);
+    const idx = ordem.findIndex(([m,t]) => m === getMarca(it) && t === getTipo(it));
+    grupos[idx].itens.push(it);
   });
   grupos.forEach(g => g.itens.sort((a,b) => (getPreco(b) - getPreco(a)) || String(a.nome).localeCompare(String(b.nome),'pt-BR')));
   return grupos.filter(g => g.itens.length);
@@ -563,7 +569,7 @@ async function renderProdutosSimples(){
   if (!data || !data.length){ el.innerHTML = '<div class="empty">Nenhum produto simples cadastrado ainda.</div>'; return; }
 
   el.innerHTML = '<div class="table-wrap"><table><thead><tr><th>Produto</th><th>Categoria</th><th>Código</th><th>Preço (R$)</th><th>Un/Caixa</th><th>Ativo</th><th></th></tr></thead><tbody>'+
-    agruparPorLinhaETipo(data, marcaSimples, p => tipoPorNome(p.nome), p => Number(p.preco)||0).map(g =>
+    agruparPorLinhaETipo(data, marcaSimples, tipoSimples, p => Number(p.preco)||0).map(g =>
       '<tr><td colspan="7" style="background:#F4ECE4;font-weight:700;font-size:.78rem;letter-spacing:.04em;color:var(--bordo-dark)">'+esc(g.titulo)+'</td></tr>'+
       g.itens.map(p => (
       '<tr'+(p.ativo?'':' class="inativo"')+'>'+
@@ -609,14 +615,23 @@ async function excluirProdutoSimples(id){
   await renderProdutosSimples();
 }
 
-function abrirModalProdutoSimples(id){
+async function preencherCategoriasSimples(sel){
+  let nomes = [];
+  try { const { data } = await sb.from('freezer_categorias_simples').select('nome').order('criado_em'); nomes = (data||[]).map(c => c.nome); } catch(e){}
+  if (!nomes.length) nomes = ['Picolé','Pote'];
+  if (sel && !nomes.includes(sel)) nomes.push(sel);
+  $('mpsCategoria').innerHTML = nomes.map(n => '<option value="'+esc(n)+'">'+esc(n)+'</option>').join('');
+  $('mpsCategoria').value = sel || nomes[0];
+}
+
+async function abrirModalProdutoSimples(id){
   $('mpsMsg').className = 'msg';
   const p = id ? produtosSimplesCache.find(x => x.id === id) : null;
 
   $('mpsId').value = p ? p.id : '';
   $('mpsTitulo').textContent = p ? 'Editar Produto (Preço Simples)' : 'Novo Produto (Preço Simples)';
   $('mpsNome').value = p ? p.nome : '';
-  $('mpsCategoria').value = p ? p.categoria : 'Picolé';
+  await preencherCategoriasSimples(p ? p.categoria : 'Picolé');
   $('mpsCodigo').value = p ? (p.codigo || '') : '';
   $('mpsPreco').value = p ? Number(p.preco||0) : '0';
   $('mpsMarca').value = p ? (p.marca || '') : 'Yeez';
@@ -689,7 +704,7 @@ async function abrirModalTabelaPreco(id){
     itensExistentes = itens || [];
   }
   const precoPorProduto = {}; itensExistentes.forEach(i => { precoPorProduto[i.produto_simples_id || i.produto_id] = i.preco; });
-  const { data: produtosFab } = await sb.from('precificacao_produtos').select('id,nome,categoria').in('categoria', ['Picolés','Potes','Gelato']).eq('origem','fabrica').eq('ativo', true).order('categoria').order('nome');
+  const { data: produtosFab } = await sb.from('precificacao_produtos').select('id,nome,categoria').in('categoria', ['Picolés','Potes']).eq('origem','fabrica').eq('ativo', true).order('categoria').order('nome');
   produtosFabTabela = produtosFab || [];
 
   // preço de referência (tabela padrão) para ordenar os itens que ainda não têm preço nesta tabela
@@ -701,7 +716,7 @@ async function abrirModalTabelaPreco(id){
   }
   const linhasTabela = produtosFabTabela.map(p => ({ kind:'F', id:p.id, nome:p.nome, marca:'Luna', tipo: p.categoria === 'Potes' ? 'Potes' : 'Picolés',
       preco: precoPorProduto[p.id] != null ? Number(precoPorProduto[p.id]) : (precoPadraoRef[p.id] || 0) }))
-    .concat((produtos||[]).map(p => ({ kind:'S', id:p.id, nome:p.nome, marca: marcaSimples(p), tipo: tipoPorNome(p.nome), padrao: p.preco,
+    .concat((produtos||[]).map(p => ({ kind:'S', id:p.id, nome:p.nome, marca: marcaSimples(p), tipo: tipoSimples(p), padrao: p.preco,
       preco: precoPorProduto[p.id] != null ? Number(precoPorProduto[p.id]) : (Number(p.preco)||0) })));
   $('tpItensLista').innerHTML = agruparPorLinhaETipo(linhasTabela, x => x.marca, x => x.tipo, x => x.preco).map(g =>
     '<div style="font-weight:700;font-size:.78rem;letter-spacing:.04em;color:var(--bordo-dark);background:#F4ECE4;padding:5px 8px;margin:10px 0 6px;border-radius:4px">'+esc(g.titulo)+'</div>'+
@@ -881,7 +896,7 @@ function irParaVisita(freezerId){
 async function carregarProdutosFreezer(){
   if (produtosCache) return produtosCache;
   const [fabR, avulsoR] = await Promise.all([
-    sb.from('precificacao_produtos').select('id,nome,categoria').in('categoria', ['Picolés','Potes','Gelato']).eq('origem','fabrica').eq('ativo', true).order('nome'),
+    sb.from('precificacao_produtos').select('id,nome,categoria').in('categoria', ['Picolés','Potes']).eq('origem','fabrica').eq('ativo', true).order('nome'),
     sb.from('freezer_produtos_simples').select('id,nome,categoria,preco,unidades_por_caixa').eq('ativo', true).order('nome'),
   ]);
   const fabIds = (fabR.data||[]).map(p => p.id);
