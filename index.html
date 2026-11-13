@@ -689,7 +689,7 @@ async function abrirModalTabelaPreco(id){
     itensExistentes = itens || [];
   }
   const precoPorProduto = {}; itensExistentes.forEach(i => { precoPorProduto[i.produto_simples_id || i.produto_id] = i.preco; });
-  const { data: produtosFab } = await sb.from('precificacao_produtos').select('id,nome,categoria').in('categoria', ['Picolés','Potes']).eq('origem','fabrica').eq('ativo', true).order('categoria').order('nome');
+  const { data: produtosFab } = await sb.from('precificacao_produtos').select('id,nome,categoria').in('categoria', ['Picolés','Potes','Gelato']).eq('origem','fabrica').eq('ativo', true).order('categoria').order('nome');
   produtosFabTabela = produtosFab || [];
 
   // preço de referência (tabela padrão) para ordenar os itens que ainda não têm preço nesta tabela
@@ -881,7 +881,7 @@ function irParaVisita(freezerId){
 async function carregarProdutosFreezer(){
   if (produtosCache) return produtosCache;
   const [fabR, avulsoR] = await Promise.all([
-    sb.from('precificacao_produtos').select('id,nome,categoria').in('categoria', ['Picolés','Potes']).eq('origem','fabrica').eq('ativo', true).order('nome'),
+    sb.from('precificacao_produtos').select('id,nome,categoria').in('categoria', ['Picolés','Potes','Gelato']).eq('origem','fabrica').eq('ativo', true).order('nome'),
     sb.from('freezer_produtos_simples').select('id,nome,categoria,preco,unidades_por_caixa').eq('ativo', true).order('nome'),
   ]);
   const fabIds = (fabR.data||[]).map(p => p.id);
